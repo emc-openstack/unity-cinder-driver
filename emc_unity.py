@@ -35,7 +35,6 @@ from taskflow.types import failure
 
 from cinder import exception
 from cinder.i18n import _, _LW, _LI, _LE
-from cinder import objects
 from cinder.volume.configuration import Configuration
 from cinder.volume.drivers.san import san
 from cinder.volume import manager
@@ -46,10 +45,11 @@ from cinder.zonemanager import utils as zm_utils
 LOG = logging.getLogger(__name__)
 
 CONF = cfg.CONF
-VERSION = '00.01.00'
+VERSION = '00.02.01'
 
 GiB = 1024 * 1024 * 1024
 ENABLE_TRACE = False
+EMC_OPENSTACK_DUMMY_LUN = 'openstack_dummy_lun'
 
 loc_opts = [
     cfg.StrOpt('storage_pool_names',
@@ -122,6 +122,7 @@ class EMCUnityRESTClient(object):
     HostLUNTypeEnum_LUN = 1
     HostLUNAccessEnum_NoAccess = 0
     HostLUNAccessEnum_Production = 1
+    LUN_NAME_IN_USE = 108007744
 
     def __init__(self, host, port=443, user='Local/admin',
                  password='', realm='Security Realm',
@@ -320,7 +321,8 @@ class EMCUnityRESTClient(object):
         return self._get_all('license', fields)
 
     def create_consistencygroup(self, group_id):
-        cg_create_url = '/api/types/storageResource/action/createLunGroup'
+        cg_create_url = (
+            '/api/types/storageResource/action/createConsistencyGroup')
         req_data = {'name': group_id}
         err, resp = self._request(cg_create_url, req_data)
         return (err, None) if err else (err,
@@ -335,7 +337,8 @@ class EMCUnityRESTClient(object):
     def update_consistencygroup(self, group_id, add_luns=None,
                                 remove_luns=None):
         cg_update_url = (
-            '/api/instances/storageResource/%s/action/modifyLunGroup' %
+            '/api/instances/storageResource/%s/action/'
+            'modifyConsistencyGroup' %
             group_id)
         add_data = [{"lun": {"id": add_id}}
                     for add_id in add_luns] if add_luns else []
@@ -358,6 +361,9 @@ class EMCUnityRESTClient(object):
                 'description': name,
                 'lunParameters': lun_parameters}
         err, resp = self._request(lun_create_url, data)
+        if err and self.LUN_NAME_IN_USE == err['errorCode']:
+            LOG.info(_LI('LUN %s was already created on array.'), name)
+            return None, self.get_lun_by_name(name)[0]
         return (err, None) if err else \
             (err, resp['content']['storageResource'])
 
@@ -451,7 +457,8 @@ class EMCUnityRESTClient(object):
              'accessMask': self.HostLUNAccessEnum_Production})
         if lun_cg:
             lun_modify_url = (
-                '/api/instances/storageResource/%s/action/modifyLunGroup'
+                '/api/instances/storageResource/%s/action/'
+                'modifyConsistencyGroup'
                 % lun_cg)
             data = {"lunModify": [
                 {'lun': {'id': lun_id},
@@ -473,8 +480,8 @@ class EMCUnityRESTClient(object):
              'accessMask': self.HostLUNAccessEnum_NoAccess})
         if lun_cg:
             lun_modify_url = (
-                '/api/instances/storageResource/%s/action/modifyLunGroup'
-                % lun_cg)
+                '/api/instances/storageResource/%s/action/'
+                'modifyConsistencyGroup' % lun_cg)
             data = {"lunModify": [
                 {'lun': {'id': lun_id},
                  'lunParameters': {'hostAccess': host_access_list}}]}
@@ -795,24 +802,8 @@ class EMCUnityHelper(object):
                 return None
         return snap_id[0]['id']
 
-    def _consistencygroup_creation_check(self, group):
-        """Check extra spec for consistency group."""
-        if group.get('volume_type_id') is not None:
-            for id in group['volume_type_id'].split(","):
-                if id:
-                    provisioning = (
-                        volume_types.get_volume_type_extra_specs(id)
-                        ['storagetype:provisioning'])
-                    if provisioning == 'compressed':
-                        msg = _("Failed to create consistency group %s "
-                                "because Unity consistency group cannot "
-                                "accept compressed LUNs as members."
-                                ) % group['id']
-                        raise exception.VolumeBackendAPIException(data=msg)
-
     def create_consistencygroup(self, group):
         """Creates a consistency group."""
-        self._consistencygroup_creation_check(group)
         cg_id = group.id
         model_update = {'status': 'available'}
         err, res = self.client.create_consistencygroup(cg_id)
@@ -1058,7 +1049,8 @@ class EMCUnityHelper(object):
         orphan_initiators = []
         new_initiator_uids = []
         for initiator_uid in initiator_uids:
-            initiator = self.client.get_initiator_by_uid(initiator_uid)
+            initiator = self.client.get_initiator_by_uid(
+                initiator_uid, ('parentHost',))
             if initiator:
                 initiator = initiator[0]
                 if 'parentHost' in initiator and initiator['parentHost']:
@@ -1069,13 +1061,17 @@ class EMCUnityHelper(object):
                 new_initiator_uids.append(initiator_uid)
         return registered_initiators, orphan_initiators, new_initiator_uids
 
-    def _extract_host_id(self, registered_initiators, hostname=None):
+    def _extract_host(self, registered_initiators, hostname=None):
+        """Return host object by initiators or hostname."""
         if registered_initiators:
-            return registered_initiators[0]['parentHost']['id']
+            reg_id = registered_initiators[0]['parentHost']['id']
+            return self.client.get_host_by_id(
+                reg_id, ('id', 'name', 'hostLUNs'))[0]
         if hostname:
-            host = self.client.get_host_by_name(hostname, ('id',))
+            host = self.client.get_host_by_name(
+                hostname, ('id', 'name', 'hostLUNs'))
             if host:
-                return host[0]['id']
+                return host[0]
         return None
 
     def _create_initiators(self, new_initiator_uids, host_id):
@@ -1130,17 +1126,28 @@ class EMCUnityHelper(object):
     def arrange_host(self, connector):
         registered_initiators, orphan_initiators, new_initiator_uids = \
             self._categorize_initiators(connector)
-        host_id = self._extract_host_id(registered_initiators,
-                                        connector['host'])
-        if host_id is None:
+        host = self._extract_host(registered_initiators,
+                                  connector['host'])
+        if host is None:
             err, host = self.client.create_host(connector['host'])
 
             if err:
                 msg = _('Failed to create host %s.') % connector['host']
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
-            host_id = host['id']
-
+        host_id = host['id']
+        # Occupy HLU 0 to avoid LUNZ issue
+        if 'hostLUNs' not in host or not host['hostLUNs']:
+            err, lun = self.client.create_lun(
+                self.storage_pools_map.values()[0],
+                EMC_OPENSTACK_DUMMY_LUN,
+                GiB)
+            if err:
+                msg = _('Failed to create dummy LUN'
+                        ' for host %s') % connector['host']
+                LOG.error(msg)
+                raise exception.VolumeBackendAPIException(data=err['messages'])
+            self.client.expose_lun(lun['id'], None, None, host_id)
         self._create_initiators(new_initiator_uids, host_id)
         self._register_initiators(orphan_initiators, host_id)
         return host_id
@@ -1326,11 +1333,12 @@ class EMCUnityHelper(object):
         lun_id = self._extra_lun_or_snap_id(volume)
         registered_initiators, orphan_initiators, new_initiator_uids = \
             self._categorize_initiators(connector)
-        host_id = self._extract_host_id(registered_initiators,
-                                        connector['host'])
-        if not host_id:
+        host = self._extract_host(registered_initiators,
+                                  connector['host'])
+        if not host:
             LOG.warning(_LW("Host using %s is not found."), volume['name'])
         else:
+            host_id = host['id']
             lun_data = self.get_lun_by_id(lun_id)
             self.hide_lun(volume, lun_data, host_id)
 
@@ -1398,9 +1406,11 @@ class EMCUnityHelper(object):
     def manage_existing_get_size(self, volume, ref):
         """Return size of volume to be managed by manage_existing."""
         if 'source-id' in ref:
-            lun = self.client.get_lun_by_id(ref['source-id'])
+            lun = self.client.get_lun_by_id(ref['source-id'],
+                                            fields=['pool', 'sizeTotal'])
         elif 'source-name' in ref:
-            lun = self.client.get_lun_by_name(ref['source-name'])
+            lun = self.client.get_lun_by_name(ref['source-name'],
+                                              fields=['pool', 'sizeTotal'])
         else:
             reason = _('Reference must contain source-id or source-name key.')
             raise exception.ManageExistingInvalidReference(
@@ -1411,7 +1421,6 @@ class EMCUnityHelper(object):
             reason = _('Find no lun with the specified id or name.')
             raise exception.ManageExistingInvalidReference(
                 existing_ref=ref, reason=reason)
-
         if lun[0]['pool']['id'] != self._get_target_storage_pool_id(volume):
             reason = _('The input lun %s is not in a manageable '
                        'pool backend.') % lun[0]['id']
@@ -1463,12 +1472,12 @@ class EMCUnityDriver(san.SanDriver):
                                                    add_volumes, remove_volumes)
 
     def create_cgsnapshot(self, context, cgsnapshot):
-        snapshots = objects.SnapshotList().get_all_for_cgsnapshot(
+        snapshots = self.db.snapshot_get_all_for_cgsnapshot(
             context, cgsnapshot['id'])
         return self.helper.create_cgsnapshot(cgsnapshot, snapshots)
 
     def delete_cgsnapshot(self, context, cgsnapshot):
-        snapshots = objects.SnapshotList().get_all_for_cgsnapshot(
+        snapshots = self.db.snapshot_get_all_for_cgsnapshot(
             context, cgsnapshot['id'])
         return self.helper.delete_cgsnapshot(cgsnapshot, snapshots)
 
