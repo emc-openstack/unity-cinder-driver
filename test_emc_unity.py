@@ -35,6 +35,7 @@ class EMCUnityDriverTestData(object):
     storage_pool_name_default = 'StoragePool00'
 
     storage_pool_id_default = 'pool_1'
+    emc_dummy_lun = 'openstack_dummy_lun'
 
     resp_get_pool_by_name = {
         'entries': [
@@ -521,7 +522,7 @@ class EMCUnityDriverTestData(object):
                  'initiatorId': iscsi_initiator_iqn_default}}]}
 
     @staticmethod
-    def req_get_host_by_name(hostname, fields=None):
+    def req_get_host_by_name(hostname, fields=('id', 'name', 'hostLUNs')):
         url = '/api/types/host/instances?filter=%s' % \
               urllib2.quote('name eq "%s"' % hostname)
         url += (('&fields=%s' % ','.join(fields)) if fields else "")
@@ -532,24 +533,7 @@ class EMCUnityDriverTestData(object):
             {'content':
                 {'id': 'Host_1'}}]}
 
-    @staticmethod
-    def resp_get_host_by_name(host_id):
-        return {
-            "entries": [{
-                "content": {
-                    "address": "test",
-                    "name": "test",
-                    "id": host_id,
-                    "type": 1,
-                    "storageResources": [],
-                    "vms": [],
-                    "hostIPPorts": [],
-                    "hostLUNs": []
-                }
-            }]
-        }
-
-    resq_get_host_unexist = {"entryCount": 0,
+    resp_get_host_unexist = {"entryCount": 0,
                              "entries": []}
 
     @staticmethod
@@ -586,7 +570,7 @@ class EMCUnityDriverTestData(object):
         'content': {'id': 'HostInitiator_21'}}
 
     @staticmethod
-    def req_get_initiator_by_uid(uid, fields=None):
+    def req_get_initiator_by_uid(uid, fields=('parentHost',)):
         url = '/api/types/hostInitiator/instances?filter=%s' % \
               urllib2.quote('initiatorId eq "%s"' % uid)
         url += (('&fields=%s' % ','.join(fields)) if fields else "")
@@ -627,12 +611,26 @@ class EMCUnityDriverTestData(object):
         return mock.call(url)
 
     @staticmethod
-    def req_get_host_by_id(hostid, fields=None):
+    def req_get_host_by_id(hostid, fields=('id', 'name', 'hostLUNs')):
         url = '/api/instances/host/%s' % hostid
         url += (('?fields=%s' % ','.join(fields)) if fields else "")
         return mock.call(url)
 
     resp_get_host_by_id = {
+        "content": {
+            "address": "fake.addr.com",
+            "name": host_name_default,
+            "id": host_id_default,
+            "type": 5,
+            "storageResources": [],
+            "vms": [],
+            "hostIPPorts": [],
+            "hostLUNs": [{'id', host_id_default}],
+            "fcHostInitiators": [{"id": "HostInitiator_21"},
+                                 {"id": "HostInitiator_22"}],
+            "iscsiHostInitiators": []}}
+
+    resp_get_host_by_id_no_host = {
         "content": {
             "address": "fake.addr.com",
             "name": host_name_default,
@@ -826,7 +824,7 @@ class EMCUnityDriverTestData(object):
 
     @staticmethod
     def req_create_consistencygroup(group_id, group_desc=None):
-        url = '/api/types/storageResource/action/createLunGroup'
+        url = '/api/types/storageResource/action/createConsistencyGroup'
         resp_create_group = {'name': group_id}
         if group_desc:
             resp_create_group['description'] = group_desc
@@ -852,8 +850,8 @@ class EMCUnityDriverTestData(object):
 
     @staticmethod
     def req_update_consistencygroup(group_id, add_luns, remove_luns):
-        url = '/api/instances/storageResource/%s/action/modifyLunGroup' \
-              % group_id
+        url = ('/api/instances/storageResource/%s/action/'
+               'modifyConsistencyGroup' % group_id)
         add_data = [{"lun": {"id": add_id}}
                     for add_id in add_luns] if add_luns else []
         remove_data = [{"lun": {"id": remove_id}}
@@ -1419,6 +1417,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         hook = RequestSideEffect()
         hook.append(None, TD.resp_get_lun_by_id_default)
         hook.append(None, TD.resp_get_initiator_by_uid_iscsi_default)
+        hook.append(None, TD.resp_get_host_by_id)
         hook.append(None, None)
         hook.append(None, TD.resp_get_host_lun_by_ends_default)
         EMCUnityRESTClient._request = mock.Mock(side_effect=hook)
@@ -1427,6 +1426,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         expected_calls = [
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_get_initiator_by_uid(TD.iscsi_initiator_iqn_default),
+            TD.req_get_host_by_id(TD.host_id_default),
             TD.req_expose_lun(TD.lun_id_default,
                               (TD.host_id_default,),
                               (TD.HostLUNAccessEnum_Production,)),
@@ -1451,6 +1451,8 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         hook.append(None, TD.resp_get_initiator_by_uid_iscsi_orphan)
         hook.append(1, None)
         hook.append(None, TD.resp_create_host_default)
+        hook.append(None, TD.resp_create_lun)
+        hook.append(None, None)
         hook.append(None, None)
         hook.append(None, None)
         hook.append(None, TD.resp_get_host_lun_by_ends_default)
@@ -1460,8 +1462,16 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         expected_calls = [
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_get_initiator_by_uid(TD.iscsi_initiator_iqn_default),
-            TD.req_get_host_by_name(TD.os_connector_default['host'], ('id',)),
+            TD.req_get_host_by_name(TD.os_connector_default['host'],
+                                    ('id', 'name', 'hostLUNs')),
             TD.req_create_host(TD.os_connector_default['host']),
+            TD.req_create_lun(TD.storage_pool_id_default,
+                              TD.emc_dummy_lun,
+                              TD.os_vol_default['size'] * GiB,
+                              True),
+            TD.req_expose_lun(TD.lun_id_default,
+                              (TD.host_id_default,),
+                              (TD.HostLUNAccessEnum_Production,)),
             TD.req_register_initiators('HostInitiator_11',
                                        TD.host_id_default),
             TD.req_expose_lun(TD.lun_id_default,
@@ -1476,6 +1486,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         hook = RequestSideEffect()
         hook.append(None, TD.resp_get_lun_by_id_default)
         hook.append(None, TD.resp_get_initiator_by_uid_iscsi_default)
+        hook.append(None, TD.resp_get_host_by_id)
         hook.append({'errorCode': 0x6701020}, None)
         hook.append(None, TD.resp_get_host_lun_by_ends_default)
         EMCUnityRESTClient._request = mock.Mock(side_effect=hook)
@@ -1484,6 +1495,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         expected_calls = [
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_get_initiator_by_uid(TD.iscsi_initiator_iqn_default),
+            TD.req_get_host_by_id(TD.host_id_default),
             TD.req_expose_lun(TD.lun_id_default,
                               (TD.host_id_default,),
                               (TD.HostLUNAccessEnum_Production,)),
@@ -1496,6 +1508,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         hook = RequestSideEffect()
         hook.append(None, TD.resp_get_lun_by_id_default)
         hook.append(None, TD.resp_get_initiator_by_uid_iscsi_default)
+        hook.append(None, TD.resp_get_host_by_id)
         hook.append({'errorCode': 1}, None)
         EMCUnityRESTClient._request = mock.Mock(side_effect=hook)
         self.assertRaisesRegexp(exception.VolumeBackendAPIException,
@@ -1508,6 +1521,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         hook = RequestSideEffect()
         hook.append(None, TD.resp_get_lun_by_id_default)
         hook.append(None, TD.resp_get_initiator_by_uid_iscsi_default)
+        hook.append(None, TD.resp_get_host_by_id)
         hook.append(None, None)
         hook.append(1, None)
         hook.append(None, None)
@@ -1522,6 +1536,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         hook = RequestSideEffect()
         hook.append(None, TD.resp_get_lun_by_id_default)
         hook.append(None, TD.resp_get_initiator_by_uid_iscsi_default)
+        hook.append(None, TD.resp_get_host_by_id)
         hook.append(None, None)
         hook.append(None, TD.resp_get_host_lun_by_ends_none)
         hook.append(None, None)
@@ -1537,6 +1552,8 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         hook.append(None, TD.resp_get_lun_by_id_default)
         hook.append(1, None)
         hook.append(None, TD.resp_get_host_by_name_default)
+        hook.append(None, TD.resp_create_lun)
+        hook.append(None, None)
         hook.append(None, TD.resp_create_initiators)
         hook.append(None, None)
         hook.append(None, TD.resp_get_host_lun_by_ends_default)
@@ -1546,7 +1563,15 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         expected_calls = [
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_get_initiator_by_uid(TD.iscsi_initiator_iqn_default),
-            TD.req_get_host_by_name(TD.os_connector_default['host'], ('id',)),
+            TD.req_get_host_by_name(TD.os_connector_default['host'],
+                                    ('id', 'name', 'hostLUNs')),
+            TD.req_create_lun(TD.storage_pool_id_default,
+                              TD.emc_dummy_lun,
+                              TD.os_vol_default['size'] * GiB,
+                              True),
+            TD.req_expose_lun(TD.lun_id_default,
+                              (TD.host_id_default,),
+                              (TD.HostLUNAccessEnum_Production,)),
             TD.req_create_initiators(TD.iscsi_initiator_iqn_default,
                                      TD.host_id_default),
             TD.req_expose_lun(TD.lun_id_default,
@@ -1560,6 +1585,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
     def test_terminate_connection_default_registered_initiator(self):
         hook = RequestSideEffect()
         hook.append(None, TD.resp_get_initiator_by_uid_iscsi_default)
+        hook.append(None, TD.resp_get_host_by_id)
         hook.append(None, TD.resp_get_lun_by_id_default)
         hook.append(None, None)
 
@@ -1568,6 +1594,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
                                          TD.os_connector_default)
         expected_calls = [
             TD.req_get_initiator_by_uid(TD.iscsi_initiator_iqn_default),
+            TD.req_get_host_by_id(TD.host_id_default),
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_expose_lun(TD.lun_id_default,
                               (TD.host_id_default,),
@@ -1588,7 +1615,8 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
                                          TD.os_connector_default)
         expected_calls = [
             TD.req_get_initiator_by_uid(TD.iscsi_initiator_iqn_default),
-            TD.req_get_host_by_name(TD.os_connector_default['host'], ('id',)),
+            TD.req_get_host_by_name(TD.os_connector_default['host'],
+                                    ('id', 'name', 'hostLUNs')),
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_expose_lun(TD.lun_id_default,
                               (TD.host_id_default,),
@@ -1612,6 +1640,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
     def test_terminate_connection_missing_lun(self):
         hook = RequestSideEffect()
         hook.append(None, TD.resp_get_initiator_by_uid_iscsi_default)
+        hook.append(None, TD.resp_get_host_by_id)
         hook.append(TD.resp_get_lun_by_id_err, None)
         EMCUnityRESTClient._request = mock.Mock(side_effect=hook)
         self.assertRaisesRegexp(exception.VolumeBackendAPIException,
@@ -1622,6 +1651,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
                                 TD.os_connector_default)
         expected_calls = [
             TD.req_get_initiator_by_uid(TD.iscsi_initiator_iqn_default),
+            TD.req_get_host_by_id(TD.host_id_default),
             TD.req_get_lun_by_id(TD.lun_id_default),
         ]
 
@@ -1630,6 +1660,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
     def test_terminate_connection_failed(self):
         hook = RequestSideEffect()
         hook.append(None, TD.resp_get_initiator_by_uid_iscsi_default)
+        hook.append(None, TD.resp_get_host_by_id)
         hook.append(None, TD.resp_get_lun_by_id_default)
         hook.append(TD.resp_hide_lun_error, None)
         EMCUnityRESTClient._request = mock.Mock(side_effect=hook)
@@ -1642,6 +1673,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
 
         expected_calls = [
             TD.req_get_initiator_by_uid(TD.iscsi_initiator_iqn_default),
+            TD.req_get_host_by_id(TD.host_id_default),
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_expose_lun(TD.lun_id_default,
                               (TD.host_id_default,),
@@ -1801,8 +1833,10 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         size = self.driver.manage_existing_get_size(
             TD.os_vol_for_manage_existing, existing_ref2)
         expected_calls = [
-            TD.req_get_lun_by_id(TD.lun_id_default, None),
-            TD.req_get_lun_by_name(existing_ref2['source-name'], None)]
+            TD.req_get_lun_by_id(TD.lun_id_default,
+                                 ['pool', 'sizeTotal']),
+            TD.req_get_lun_by_name(existing_ref2['source-name'],
+                                   ['pool', 'sizeTotal'])]
         self.assertEqual(size, 1)
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)
 
@@ -1852,7 +1886,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
                                 TD.test_existing_ref)
 
         expected_calls = [
-            TD.req_get_lun_by_id(TD.lun_id_default, ())]
+            TD.req_get_lun_by_id(TD.lun_id_default, ['pool', 'sizeTotal'])]
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)
 
     def test_get_managed_storage_pools_map(self):
@@ -1926,8 +1960,10 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
                     resp_get_initiator_by_uid_fc_missing_host_wwn1)
         hook.append(None,
                     resp_get_initiator_by_uid_fc_missing_host_wwn2)
-        hook.append(None, TD.resq_get_host_unexist)
+        hook.append(None, TD.resp_get_host_unexist)
         hook.append(None, TD.resp_create_host(TD.host_id_default))
+        hook.append(None, TD.resp_create_lun)
+        hook.append(None, None)
         hook.append(None, None)
         hook.append(None, None)
         hook.append(None, None)
@@ -1949,8 +1985,16 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn1),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn2),
             # _extract_host_id
-            TD.req_get_host_by_name(TD.host_name_default, ('id',)),
+            TD.req_get_host_by_name(TD.host_name_default,
+                                    ('id', 'name', 'hostLUNs')),
             TD.req_create_host(TD.host_name_default),
+            TD.req_create_lun(TD.storage_pool_id_default,
+                              TD.emc_dummy_lun,
+                              TD.os_vol_default['size'] * GiB,
+                              True),
+            TD.req_expose_lun(TD.lun_id_default,
+                              (TD.host_id_default,),
+                              (TD.HostLUNAccessEnum_Production,)),
             TD.req_register_initiator('HostInitiator_21', TD.host_id_default),
             TD.req_register_initiator('HostInitiator_22', TD.host_id_default),
             TD.req_expose_lun(TD.lun_id_default,
@@ -1982,6 +2026,7 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
                     TD.resp_get_initiator_by_uid_fc_wwn1)
         hook.append(None,
                     TD.resp_get_initiator_by_uid_fc_wwn2)
+        hook.append(None, TD.resp_get_host_by_id)
         hook.append(resp_expose_lun_error, None)
 
         EMCUnityRESTClient._request = mock.Mock(side_effect=hook)
@@ -1994,6 +2039,7 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn1),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn2),
+            TD.req_get_host_by_id(TD.host_id_default),
             TD.req_expose_lun(TD.lun_id_default,
                               (TD.host_id_default,),
                               (TD.HostLUNAccessEnum_Production,)),
@@ -2018,6 +2064,7 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
                     TD.resp_get_initiator_by_uid_fc_wwn1)
         hook.append(None,
                     TD.resp_get_initiator_by_uid_fc_wwn2)
+        hook.append(None, TD.resp_get_host_by_id)
         hook.append(None, None)
         hook.append(None, TD.resp_get_host_lun_by_ends_default)
         hook.append(None, TD.resp_get_host_by_id)
@@ -2038,6 +2085,7 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn1),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn2),
+            TD.req_get_host_by_id(TD.host_id_default),
             TD.req_expose_lun(TD.lun_id_default,
                               ('fake_host', TD.host_id_default),
                               (TD.HostLUNAccessEnum_Production,
@@ -2070,8 +2118,10 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
                     resp_get_initiator_by_uid_unexist)
         hook.append(None,
                     resp_get_initiator_by_uid_unexist)
-        hook.append(None, TD.resq_get_host_unexist)
+        hook.append(None, TD.resp_get_host_unexist)
         hook.append(None, TD.resp_create_host(TD.host_id_default))
+        hook.append(None, TD.resp_create_lun)
+        hook.append(None, None)
         hook.append(None, TD.resp_create_initiator_fc("HostInitiator_21"))
         hook.append(None, TD.resp_create_initiator_fc("HostInitiator_22"))
         hook.append(None, None)
@@ -2095,8 +2145,17 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn1),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn2),
-            TD.req_get_host_by_name(TD.host_name_default, ('id',)),
+            TD.req_get_host_by_name(TD.host_name_default,
+                                    ('id', 'name', 'hostLUNs')),
             TD.req_create_host(TD.host_name_default),
+            TD.req_create_lun(
+                TD.storage_pool_id_default,
+                TD.emc_dummy_lun,
+                TD.os_vol_default['size'] * GiB,
+                True),
+            TD.req_expose_lun(TD.lun_id_default,
+                              (TD.host_id_default,),
+                              (TD.HostLUNAccessEnum_Production,)),
             TD.req_create_initiator_fc(TD.fc_initator_wwn1,
                                        TD.host_id_default),
             TD.req_create_initiator_fc(TD.fc_initator_wwn2,
@@ -2133,6 +2192,7 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
                     TD.resp_get_initiator_by_uid_fc_wwn1)
         hook.append(None,
                     TD.resp_get_initiator_by_uid_fc_wwn2)
+        hook.append(None, TD.resp_get_host_by_id)
         hook.append(None, None)
         hook.append(None, TD.resp_get_host_lun_by_ends_default)
         hook.append(None, TD.resp_get_host_by_id)
@@ -2154,6 +2214,7 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn1),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn2),
+            TD.req_get_host_by_id(TD.host_id_default),
             TD.req_expose_lun(TD.lun_id_default,
                               ('fake_host', TD.host_id_default,),
                               (TD.HostLUNAccessEnum_Production,
@@ -2196,8 +2257,10 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
                     resp_get_initiator_by_uid_unexist)
         hook.append(None,
                     resp_get_initiator_by_uid_unexist)
-        hook.append(None, TD.resq_get_host_unexist)
+        hook.append(None, TD.resp_get_host_unexist)
         hook.append(None, TD.resp_create_host(TD.host_id_default))
+        hook.append(None, TD.resp_create_lun)
+        hook.append(None, None)
         hook.append(None, TD.resp_create_initiator_fc("HostInitiator_21"))
         hook.append(None, TD.resp_create_initiator_fc("HostInitiator_22"))
         hook.append(None, None)
@@ -2230,9 +2293,17 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn1),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn2),
-            TD.req_get_host_by_name(TD.host_name_default, ('id',)),
+            TD.req_get_host_by_name(TD.host_name_default,
+                                    ('id', 'name', 'hostLUNs')),
             # create host
             TD.req_create_host(TD.host_name_default),
+            TD.req_create_lun(TD.storage_pool_id_default,
+                              TD.emc_dummy_lun,
+                              TD.os_vol_default['size'] * GiB,
+                              True),
+            TD.req_expose_lun(TD.lun_id_default,
+                              (TD.host_id_default,),
+                              (TD.HostLUNAccessEnum_Production,)),
             TD.req_create_initiator_fc(TD.fc_initator_wwn1,
                                        TD.host_id_default),
             TD.req_create_initiator_fc(TD.fc_initator_wwn2,
@@ -2268,9 +2339,10 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
         hook.append(None, TD.resp_get_fc_ports)
         hook.append(None, TD.resp_get_initiator_by_uid_fc_default)
         hook.append(None, TD.resp_get_initiator_by_uid_fc_default)
+        hook.append(None, TD.resp_get_host_by_id_no_host)
         hook.append(None, TD.resp_get_lun_by_id_default)
         hook.append(None, None)
-        hook.append(None, TD.resp_get_host_by_id)
+        hook.append(None, TD.resp_get_host_by_id_no_host)
 
         EMCUnityRESTClient._request = mock.Mock(side_effect=hook)
         self.driver = EMCUnityDriver(configuration=self.configuration)
@@ -2292,6 +2364,7 @@ class EMCUnityFCDriverTestCase(EMCUnityDriverTestCase):
             TD.req_get_fc_ports(('id', 'wwn', 'storageProcessor')),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn1),
             TD.req_get_initiator_by_uid(TD.fc_initator_wwn2),
+            TD.req_get_host_by_id(TD.host_id_default),
             TD.req_get_lun_by_id(TD.lun_id_default),
             TD.req_expose_lun(TD.lun_id_default,
                               (TD.host_id_default,),
