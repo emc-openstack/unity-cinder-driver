@@ -19,7 +19,8 @@ import urllib2
 
 from cinder import exception
 from cinder import test
-from cinder.tests.unit import fake_consistencygroup
+from cinder.tests.unit.consistencygroup import fake_consistencygroup
+from cinder.tests.unit import fake_constants
 from cinder.tests.unit import fake_snapshot
 from cinder.volume import configuration as conf
 from cinder.volume.drivers.emc import emc_unity
@@ -380,7 +381,7 @@ class EMCUnityDriverTestData(object):
         'name': 'vol1',
         'size': 1,
         'volume_name': 'vol1',
-        'id': lun_id_default,
+        'id': fake_constants.VOLUME_ID,
         'provider_auth': None,
         'project_id': 'project',
         'display_name': 'vol1',
@@ -396,7 +397,7 @@ class EMCUnityDriverTestData(object):
         'name': 'vol1',
         'size': 1,
         'volume_name': 'vol1',
-        'id': '1',
+        'id': fake_constants.VOLUME_ID,
         'provider_auth': None,
         'project_id': 'project',
         'display_name': 'vol1',
@@ -412,7 +413,7 @@ class EMCUnityDriverTestData(object):
         'name': 'vol1',
         'size': 1,
         'volume_name': 'vol1',
-        'id': '1',
+        'id': fake_constants.VOLUME_ID,
         'provider_auth': None,
         'project_id': 'project',
         'display_name': 'vol1',
@@ -430,7 +431,7 @@ class EMCUnityDriverTestData(object):
         'name': 'vol1',
         'size': 1,
         'volume_name': 'vol1',
-        'id': '1',
+        'id': fake_constants.VOLUME_ID,
         'provider_auth': None,
         'project_id': 'project',
         'display_name': 'vol1',
@@ -447,12 +448,12 @@ class EMCUnityDriverTestData(object):
         'name': 'vol1',
         'size': 1,
         'volume_name': 'vol1',
-        'id': '1',
+        'id': fake_constants.VOLUME_ID,
         'provider_auth': None,
         'project_id': 'project',
         'display_name': 'vol1',
         'display_description': 'test volume',
-        'volume_type_id': 'volume_type_id_xxx',
+        'volume_type_id': fake_constants.VOLUME_TYPE_ID,
         'host': 'fakehost@fackbe#%s' % storage_pool_name_default,
         'provider_location': 'system^%(sys)s|type^%(type)s|id^%(id)s' %
                              {'sys': storage_serial_number_default,
@@ -746,8 +747,8 @@ class EMCUnityDriverTestData(object):
     # Test data to run the cg related unit test
     ###############################################
     test_cgsnapshot = {
-        'consistencygroup_id': 'consistencygroup_id',
-        'id': 'cgsnapshot_id',
+        'consistencygroup_id': fake_constants.CONSISTENCY_GROUP_ID,
+        'id': fake_constants.CGSNAPSHOT_ID,
         'status': 'available',
         'description': 'test_cgsnapshot'}
 
@@ -759,7 +760,7 @@ class EMCUnityDriverTestData(object):
         'deleted_at': None,
         'description': None,
         'host': "FakeHost",
-        'id': '1',
+        'id': fake_constants.CONSISTENCY_GROUP_ID,
         'name': None,
         'project_id': '3',
         'source_cgid': None,
@@ -781,7 +782,7 @@ class EMCUnityDriverTestData(object):
     test_vol_for_snapshot = {
         'name': 'snapshot1',
         'size': 1,
-        'id': '4444',
+        'id': fake_constants.VOLUME_ID,
         'volume_name': 'vol1',
         'volume_size': 1,
         'project_id': 'project',
@@ -792,7 +793,7 @@ class EMCUnityDriverTestData(object):
     test_snapshot_data = {
         'name': 'snapshot1',
         'size': 1,
-        'id': '4444',
+        'id': fake_constants.SNAPSHOT_ID,
         'volume_name': 'vol1',
         'volume_size': 1,
         'project_id': 'project',
@@ -802,7 +803,7 @@ class EMCUnityDriverTestData(object):
     test_snapshot_with_invalid_id = {
         'name': 'snapshot1',
         'size': 1,
-        'id': '4444',
+        'id': fake_constants.SNAPSHOT_ID,
         'volume_name': 'vol1',
         'volume_size': 1,
         'project_id': 'project',
@@ -1113,8 +1114,10 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         model_update, snapshots = \
             self.driver.create_cgsnapshot(None, TD.test_cgsnapshot,
                                           [snapshot_obj])
-        expected_calls = [TD.req_get_group_by_name('consistencygroup_id'),
-                          TD.req_create_snap('res_1', 'cgsnapshot_id',
+        expected_calls = [TD.req_get_group_by_name(
+                          fake_constants.CONSISTENCY_GROUP_ID),
+                          TD.req_create_snap('res_1',
+                                             fake_constants.CGSNAPSHOT_ID,
                                              'test_cgsnapshot')]
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)
 
@@ -1133,8 +1136,10 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
                                 self.driver.create_cgsnapshot,
                                 None, TD.test_cgsnapshot,
                                 [snapshot_obj])
-        expected_calls = [TD.req_get_group_by_name('consistencygroup_id'),
-                          TD.req_create_snap('res_1', 'cgsnapshot_id',
+        expected_calls = [TD.req_get_group_by_name(
+                          fake_constants.CONSISTENCY_GROUP_ID),
+                          TD.req_create_snap('res_1',
+                                             fake_constants.CGSNAPSHOT_ID,
                                              'test_cgsnapshot')]
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)
 
@@ -1150,7 +1155,8 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         model_update, snapshots = \
             self.driver.delete_cgsnapshot(None, TD.test_cgsnapshot,
                                           [snapshot_obj])
-        expected_calls = [TD.req_get_snap_by_name('cgsnapshot_id'),
+        expected_calls = [TD.req_get_snap_by_name(
+                          fake_constants.CGSNAPSHOT_ID),
                           TD.req_delete_snap('res_1')]
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)
 
@@ -1168,7 +1174,8 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
                                 'an unexpected error*',
                                 self.driver.delete_cgsnapshot,
                                 None, TD.test_cgsnapshot, [snapshot_obj])
-        expected_calls = [TD.req_get_snap_by_name('cgsnapshot_id'),
+        expected_calls = [TD.req_get_snap_by_name(
+                          fake_constants.CGSNAPSHOT_ID),
                           TD.req_delete_snap('res_1')]
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)
 
@@ -1429,7 +1436,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
                               'target_iqn': TD.get_iscsi_iqns(TD, 'a')[0],
                               'target_portal':
                                   TD.get_iscsi_portals(TD, 'a')[0],
-                              'volume_id': TD.lun_id_default,
+                              'volume_id': fake_constants.VOLUME_ID,
                               'target_lun': TD.hlu_default})
 
     def test_initialize_connection_missing_host_with_orphan(self):
