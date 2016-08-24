@@ -1038,13 +1038,11 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         hook.append(None, TD.resp_get_group_by_name)
         hook.append()
         EMCUnityRESTClient._request = mock.Mock(side_effect=hook)
-        self.driver.db = mock.MagicMock()
-        self.driver.db.volume_get_all_by_group.return_value = \
-            TD.volumes_in_group(2)
         cg_obj = fake_consistencygroup.fake_consistencyobject_obj(
             None, **TD.test_cg)
         model_update, volumes = \
-            self.driver.delete_consistencygroup(None, cg_obj)
+            self.driver.delete_consistencygroup(
+                None, cg_obj, TD.volumes_in_group(2))
         expected_calls = [TD.req_get_group_by_name(cg_obj.id),
                           TD.req_delete_consistencygroup('res_1')]
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)
@@ -1056,16 +1054,14 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
         hook.append(None, TD.resp_get_group_by_name)
         hook.append(TD.fake_error_return)
         EMCUnityRESTClient._request = mock.Mock(side_effect=hook)
-        self.driver.db = mock.MagicMock()
-        self.driver.db.volume_get_all_by_group.return_value = \
-            TD.volumes_in_group(2)
         cg_obj = fake_consistencygroup.fake_consistencyobject_obj(
             None, **TD.test_cg)
         self.assertRaisesRegexp(exception.VolumeBackendAPIException,
                                 r'.*The system encountered '
                                 'an unexpected error*',
                                 self.driver.delete_consistencygroup,
-                                None, cg_obj)
+                                None, cg_obj,
+                                TD.volumes_in_group(2))
         expected_calls = [TD.req_get_group_by_name(cg_obj.id),
                           TD.req_delete_consistencygroup('res_1')]
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)
@@ -1105,9 +1101,7 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
                               'res_1', ['sv_1', 'sv_1'], ['sv_1', 'sv_1'])]
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)
 
-    @mock.patch(
-        'cinder.objects.snapshot.SnapshotList.get_all_for_cgsnapshot')
-    def test_create_cgsnapshot_default(self, get_all_for_cgsnapshot):
+    def test_create_cgsnapshot_default(self):
         hook = RequestSideEffect()
         hook.append(None, TD.resp_get_group_by_name)
         hook.append(None, TD.resp_create_snap)
@@ -1116,17 +1110,15 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
                                                         TD.test_cgsnapshot])
         snapshot_obj.consistencygroup_id = \
             TD.test_cgsnapshot['consistencygroup_id']
-        get_all_for_cgsnapshot.return_value = [snapshot_obj]
         model_update, snapshots = \
-            self.driver.create_cgsnapshot(None, TD.test_cgsnapshot)
+            self.driver.create_cgsnapshot(None, TD.test_cgsnapshot,
+                                          [snapshot_obj])
         expected_calls = [TD.req_get_group_by_name('consistencygroup_id'),
                           TD.req_create_snap('res_1', 'cgsnapshot_id',
                                              'test_cgsnapshot')]
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)
 
-    @mock.patch(
-        'cinder.objects.snapshot.SnapshotList.get_all_for_cgsnapshot')
-    def test_create_cgsnapshot_failed(self, get_all_for_cgsnapshot):
+    def test_create_cgsnapshot_failed(self):
         hook = RequestSideEffect()
         hook.append(None, TD.resp_get_group_by_name)
         hook.append(TD.fake_error_return)
@@ -1135,20 +1127,18 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
                                                         TD.test_cgsnapshot])
         snapshot_obj.consistencygroup_id = \
             TD.test_cgsnapshot['consistencygroup_id']
-        get_all_for_cgsnapshot.return_value = [snapshot_obj]
         self.assertRaisesRegexp(exception.VolumeBackendAPIException,
                                 r'.*The system encountered '
                                 'an unexpected error*',
                                 self.driver.create_cgsnapshot,
-                                None, TD.test_cgsnapshot)
+                                None, TD.test_cgsnapshot,
+                                [snapshot_obj])
         expected_calls = [TD.req_get_group_by_name('consistencygroup_id'),
                           TD.req_create_snap('res_1', 'cgsnapshot_id',
                                              'test_cgsnapshot')]
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)
 
-    @mock.patch(
-        'cinder.objects.snapshot.SnapshotList.get_all_for_cgsnapshot')
-    def test_delete_cgsnapshot_default(self, get_all_for_cgsnapshot):
+    def test_delete_cgsnapshot_default(self):
         hook = RequestSideEffect()
         hook.append(None, TD.resp_get_group_by_name)
         hook.append(None, {})
@@ -1157,16 +1147,14 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
                                                         TD.test_cgsnapshot])
         snapshot_obj.consistencygroup_id = \
             TD.test_cgsnapshot['consistencygroup_id']
-        get_all_for_cgsnapshot.return_value = [snapshot_obj]
         model_update, snapshots = \
-            self.driver.delete_cgsnapshot(None, TD.test_cgsnapshot)
+            self.driver.delete_cgsnapshot(None, TD.test_cgsnapshot,
+                                          [snapshot_obj])
         expected_calls = [TD.req_get_snap_by_name('cgsnapshot_id'),
                           TD.req_delete_snap('res_1')]
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)
 
-    @mock.patch(
-        'cinder.objects.snapshot.SnapshotList.get_all_for_cgsnapshot')
-    def test_delete_cgsnapshot_failed(self, get_all_for_cgsnapshot):
+    def test_delete_cgsnapshot_failed(self):
         hook = RequestSideEffect()
         hook.append(None, TD.resp_get_group_by_name)
         hook.append(TD.fake_error_return)
@@ -1175,12 +1163,11 @@ class EMCUnityiSCSIDriverTestCase(EMCUnityDriverTestCase):
                                                         TD.test_cgsnapshot])
         snapshot_obj.consistencygroup_id = \
             TD.test_cgsnapshot['consistencygroup_id']
-        get_all_for_cgsnapshot.return_value = [snapshot_obj]
         self.assertRaisesRegexp(exception.VolumeBackendAPIException,
                                 r'.*The system encountered '
                                 'an unexpected error*',
                                 self.driver.delete_cgsnapshot,
-                                None, TD.test_cgsnapshot)
+                                None, TD.test_cgsnapshot, [snapshot_obj])
         expected_calls = [TD.req_get_snap_by_name('cgsnapshot_id'),
                           TD.req_delete_snap('res_1')]
         EMCUnityRESTClient._request.assert_has_calls(expected_calls)

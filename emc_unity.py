@@ -35,7 +35,6 @@ from taskflow.types import failure
 
 from cinder import exception
 from cinder.i18n import _, _LW, _LI, _LE
-from cinder import objects
 from cinder.volume.configuration import Configuration
 from cinder.volume.drivers.san import san
 from cinder.volume import manager
@@ -46,7 +45,7 @@ from cinder.zonemanager import utils as zm_utils
 LOG = logging.getLogger(__name__)
 
 CONF = cfg.CONF
-VERSION = '00.04.00'
+VERSION = '00.04.01'
 
 GiB = 1024 * 1024 * 1024
 ENABLE_TRACE = False
@@ -864,10 +863,12 @@ class EMCUnityHelper(object):
                     snap_name)
             else:
                 raise exception.VolumeBackendAPIException(data=err['messages'])
-        model_update = {'status': cgsnapshot['status']}
+        model_update = {'status': 'available'}
+        snapshots_model_update = []
         for snapshot in snapshots:
-            snapshot['status'] = 'available'
-        return model_update, snapshots
+            snapshots_model_update.append({'id': snapshot['id'],
+                                           'status': 'available'})
+        return model_update, snapshots_model_update
 
     def delete_cgsnapshot(self, cgsnapshot, snapshots):
         """Deletes a cgsnapshot (snap group)."""
@@ -1463,8 +1464,7 @@ class EMCUnityDriver(san.SanDriver):
     def create_consistencygroup(self, context, group):
         return self.helper.create_consistencygroup(group)
 
-    def delete_consistencygroup(self, context, group):
-        volumes = self.db.volume_get_all_by_group(context, group.id)
+    def delete_consistencygroup(self, context, group, volumes):
         return self.helper.delete_consistencygroup(group, volumes)
 
     def update_consistencygroup(self, context, group,
@@ -1472,14 +1472,10 @@ class EMCUnityDriver(san.SanDriver):
         return self.helper.update_consistencygroup(group,
                                                    add_volumes, remove_volumes)
 
-    def create_cgsnapshot(self, context, cgsnapshot):
-        snapshots = objects.SnapshotList().get_all_for_cgsnapshot(
-            context, cgsnapshot['id'])
+    def create_cgsnapshot(self, context, cgsnapshot, snapshots):
         return self.helper.create_cgsnapshot(cgsnapshot, snapshots)
 
-    def delete_cgsnapshot(self, context, cgsnapshot):
-        snapshots = objects.SnapshotList().get_all_for_cgsnapshot(
-            context, cgsnapshot['id'])
+    def delete_cgsnapshot(self, context, cgsnapshot, snapshots):
         return self.helper.delete_cgsnapshot(cgsnapshot, snapshots)
 
     def create_volume(self, volume):
