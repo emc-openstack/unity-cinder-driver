@@ -187,3 +187,16 @@ Over subscription allows that the sum of all volumes' capacity (provisioned capa
 `max_over_subscription_ratio` in the back-end section is the ratio of provisioned capacity over total capacity.
 
 The default value of `max_over_subscription_ratio` is 20.0, which means the provisioned capacity can be 20 times of the total capacity. If the value of this ratio is set larger than 1.0, the provisioned capacity can exceed the total capacity.
+
+## QoS support
+
+Unity driver now supports QoS. To enable this function, User needs to set
+`maxIOPS` and/or `maxBWS` on QoS specs and associate it with a volume type.
+
+Example:
+
+    cinder qos-create unity_qos consumer=”back-end” maxIOPS=1000 maxBWS=1000
+    cinder qos-associate <qos-spec-id> <volume-type-id>
+
+
+NOTE: Unity driver only supports QoS spec whose consumer is set to `back-end`.

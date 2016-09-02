@@ -12,6 +12,7 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+
 """
 Drivers for EMC Unity array based on RESTful API.
 """
@@ -45,11 +46,16 @@ from cinder.zonemanager import utils as zm_utils
 LOG = logging.getLogger(__name__)
 
 CONF = cfg.CONF
-VERSION = '00.02.01'
+VERSION = '00.02.02'
 
 GiB = 1024 * 1024 * 1024
 ENABLE_TRACE = False
 EMC_OPENSTACK_DUMMY_LUN = 'openstack_dummy_lun'
+
+QOS_MAX_IOPS = 'maxIOPS'
+QOS_MAX_BWS = 'maxBWS'
+QOS_CONSUMER_BACKEND = 'back-end'
+QOS_CONSUMER_FRONTEND = 'front-end'
 
 loc_opts = [
     cfg.StrOpt('storage_pool_names',
@@ -123,6 +129,7 @@ class EMCUnityRESTClient(object):
     HostLUNAccessEnum_NoAccess = 0
     HostLUNAccessEnum_Production = 1
     LUN_NAME_IN_USE = 108007744
+    POLICY_NAME_IN_USE = 151032071
 
     def __init__(self, host, port=443, user='Local/admin',
                  password='', realm='Security Realm',
@@ -349,13 +356,17 @@ class EMCUnityRESTClient(object):
         err, resp = self._request(cg_update_url, req_data)
         return err, resp
 
-    def create_lun(self, pool_id, name, size, **kwargs):
+    def create_lun(self, pool_id, name, size, is_thin=False,
+                   limit_policy_id=None):
         lun_create_url = '/api/types/storageResource/action/createLun'
         lun_parameters = {'pool': {"id": pool_id},
                           'isThinEnabled': True,
                           'size': size}
-        if 'is_thin' in kwargs:
-            lun_parameters['isThinEnabled'] = kwargs['is_thin']
+        if is_thin:
+            lun_parameters['isThinEnabled'] = is_thin
+        if limit_policy_id:
+            lun_parameters['ioLimitParameters'] = {
+                'ioLimitPolicy': {'id': limit_policy_id}}
         # More Advance Feature
         data = {'name': name,
                 'description': name,
@@ -533,6 +544,33 @@ class EMCUnityRESTClient(object):
                           {'lun': lun_id, 'name': new_name})
                 raise exception.VolumeBackendAPIException(
                     data=reason)
+
+    def get_limit_policy(self, name):
+        """Get existing IO limits by name."""
+        return self._filter_by_field(
+            'ioLimitPolicy', 'name', name,
+            ('id', 'maxIOPS::ioLimitRules.maxIOPS',
+             'maxKBPS::ioLimitRules.maxKBPS'))
+
+    def create_limit_policy(self, name, max_iops=None, max_kbps=None):
+        """Create host IO limits."""
+        create_limit_url = \
+            '/api/types/ioLimitPolicy/instances'
+        data = {'name': name, 'ioLimitRules': []}
+        rule = {}
+        if max_iops:
+            rule.update({'maxIOPS': max_iops})
+        if max_kbps:
+            rule.update({'maxKBPS': max_kbps})
+        rule.update({'name': name})
+        data['ioLimitRules'].append(rule)
+        err, resp = self._request(create_limit_url, data)
+        if err:
+            if err['errorCode'] == self.POLICY_NAME_IN_USE:
+                return self.get_limit_policy(name)[0]
+            else:
+                raise exception.VolumeBackendAPIException(err['messages'])
+        return resp['content']
 
 
 class ArrangeHostTask(task.Task):
@@ -748,6 +786,22 @@ class EMCUnityHelper(object):
 
         return specs
 
+    def _get_qos_specs(self, volume_type):
+        qos_specs_id = (None if not volume_type
+                        else volume_type['qos_specs_id'])
+        emc_qos = {}
+        if not qos_specs_id:
+            return {}, None
+        if qos_specs_id:
+            qos_specs = volume_type['qos_specs']
+            for qos_spec in qos_specs:
+                emc_qos[qos_spec['key']] = qos_spec['value']
+
+        if emc_qos['consumer'] == QOS_CONSUMER_FRONTEND:
+            # We do not handle front-end qos specs
+            return {}, None
+        return emc_qos, qos_specs_id
+
     def _load_provider_location(self, provider_location):
         pl_dict = {}
         for item in provider_location.split('|'):
@@ -863,7 +917,7 @@ class EMCUnityHelper(object):
                     snap_name)
             else:
                 raise exception.VolumeBackendAPIException(data=err['messages'])
-        model_update = {'status': cgsnapshot['status']}
+        model_update = {'status': 'available'}
         for snapshot in snapshots:
             snapshot['status'] = 'available'
         return model_update, snapshots
@@ -891,6 +945,7 @@ class EMCUnityHelper(object):
         name = volume['name']
         size = volume['size'] * GiB
         extra_specs = self._get_volumetype_extraspecs(volume)
+        qos_specs, qos_specs_id = self._get_qos_specs(volume['volume_type'])
         k = 'storagetype:provisioning'
         is_thin = False
         if k in extra_specs:
@@ -903,9 +958,20 @@ class EMCUnityHelper(object):
                 msg = _('Value %(v)s of %(k)s is invalid') % {'k': k, 'v': v}
                 LOG.error(msg)
                 raise exception.VolumeBackendAPIException(data=msg)
+        limit_policy_id = None
+        if qos_specs_id:
+            limit_policy = self.client.get_limit_policy(qos_specs_id)
+            if not limit_policy:
+                limit_policy = self.client.create_limit_policy(
+                    qos_specs_id,
+                    max_iops=qos_specs.get(QOS_MAX_IOPS, None),
+                    max_kbps=qos_specs.get(QOS_MAX_BWS, None))
+            else:
+                limit_policy = limit_policy[0]
+            limit_policy_id = limit_policy['id']
         err, lun = self.client.create_lun(
             self._get_target_storage_pool_id(volume), name, size,
-            is_thin=is_thin)
+            is_thin=is_thin, limit_policy_id=limit_policy_id)
         if err:
             raise exception.VolumeBackendAPIException(data=err['messages'])
 
