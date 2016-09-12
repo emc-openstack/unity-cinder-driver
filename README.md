@@ -18,7 +18,7 @@ EMCUnityDriver performs the volume operations by Restful API management interfac
 
 ## Supported OpenStack Release
 
-This driver supports Kilo release.
+This driver supports Liberty release.
 
 ## Requirements
 

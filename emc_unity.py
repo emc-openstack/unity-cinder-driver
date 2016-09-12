@@ -46,7 +46,7 @@ from cinder.zonemanager import utils as zm_utils
 LOG = logging.getLogger(__name__)
 
 CONF = cfg.CONF
-VERSION = '00.02.02'
+VERSION = '00.03.00'
 
 GiB = 1024 * 1024 * 1024
 ENABLE_TRACE = False
