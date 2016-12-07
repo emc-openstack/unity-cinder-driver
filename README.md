@@ -22,7 +22,7 @@ This driver supports Kilo release.
 
 ## Requirements
 
-* Unity with OE V4.0.x
+* Unity with OE V4.1.x
 
 ## Supported Storage Protocol
 
@@ -45,6 +45,7 @@ The following operations will be supported by Unity Cinder Driver:
 * Create and delete consistency groups
 * Create, list, and delete consistency group snapshots
 * Modify consistency groups
+* Clone volume
 
 ## Preparation
 

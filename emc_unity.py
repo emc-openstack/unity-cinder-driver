@@ -17,6 +17,7 @@
 Drivers for EMC Unity array based on RESTful API.
 """
 
+import contextlib
 import cookielib
 import json
 import random
@@ -28,6 +29,7 @@ from oslo_concurrency import lockutils
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import timeutils
+from oslo_utils import units
 import six
 import taskflow.engines
 from taskflow.patterns import linear_flow
@@ -36,6 +38,7 @@ from taskflow.types import failure
 
 from cinder import exception
 from cinder.i18n import _, _LW, _LI, _LE
+from cinder import utils
 from cinder.volume.configuration import Configuration
 from cinder.volume.drivers.san import san
 from cinder.volume import manager
@@ -46,7 +49,7 @@ from cinder.zonemanager import utils as zm_utils
 LOG = logging.getLogger(__name__)
 
 CONF = cfg.CONF
-VERSION = '00.02.02'
+VERSION = '00.02.03'
 
 GiB = 1024 * 1024 * 1024
 ENABLE_TRACE = False
@@ -126,9 +129,17 @@ class EMCUnityRESTClient(object):
     CSRF_HEADER = 'EMC-CSRF-TOKEN'
     HostTypeEnum_HostManual = 1
     HostLUNTypeEnum_LUN = 1
+    HostLUNTypeEnum_LUN_Snap = 2
     HostLUNAccessEnum_NoAccess = 0
     HostLUNAccessEnum_Production = 1
+    HostLUNAccessEnum_Snapshot = 2
+    HostLUNAccessEnum_Both = 3
+    HostLUNAccessEnum_Mixed = 0xffff
+    HostSnapAccessEnum_ReadOnly = 0
+    HostSnapAccessEnum_ReadWrite = 1
+    HostSnapAccessAllowed = 1
     LUN_NAME_IN_USE = 108007744
+    LUN_SNAP_ACCESS_ALLOWED = 108008704
     POLICY_NAME_IN_USE = 151032071
 
     def __init__(self, host, port=443, user='Local/admin',
@@ -206,7 +217,7 @@ class EMCUnityRESTClient(object):
         req_body = None if req_data is None else json.dumps(req_data)
         url = self.mgmt_url + rel_url
         req = urllib2.Request(url, req_body, EMCUnityRESTClient.HEADERS)
-        if method not in (None, 'GET', 'POST'):
+        if method is not None:
             req.get_method = lambda: method
         self._http_log_req(req)
         err, resp = self._send_request(req)
@@ -321,6 +332,14 @@ class EMCUnityRESTClient(object):
     def get_lun_by_id(self, lun_id, fields=None):
         return self._filter_by_id('lun', lun_id, fields)
 
+    def get_snap_by_id(self, snap_id,
+                       fields=('id', 'name', 'storageResource', 'hostAccess')):
+        data = self._filter_by_id('snap', snap_id, fields)
+        if not data:
+            raise exception.VolumeBackendAPIException(
+                data=_('Cannot find snapshot with id : {}').format(snap_id))
+        return data[0]
+
     def get_basic_system_info(self, fields=None):
         return self._get_all('basicSystemInfo', fields)
 
@@ -357,7 +376,7 @@ class EMCUnityRESTClient(object):
         return err, resp
 
     def create_lun(self, pool_id, name, size, is_thin=False,
-                   limit_policy_id=None):
+                   display_name=None, limit_policy_id=None):
         lun_create_url = '/api/types/storageResource/action/createLun'
         lun_parameters = {'pool': {"id": pool_id},
                           'isThinEnabled': True,
@@ -367,9 +386,10 @@ class EMCUnityRESTClient(object):
         if limit_policy_id:
             lun_parameters['ioLimitParameters'] = {
                 'ioLimitPolicy': {'id': limit_policy_id}}
+        description = name if display_name is None else display_name
         # More Advance Feature
         data = {'name': name,
-                'description': name,
+                'description': description,
                 'lunParameters': lun_parameters}
         err, resp = self._request(lun_create_url, data)
         if err and self.LUN_NAME_IN_USE == err['errorCode']:
@@ -437,12 +457,14 @@ class EMCUnityRESTClient(object):
     def get_host_luns(self, fields=None):
         return self._get_all('hostLUN', fields)
 
-    def get_host_lun_by_ends(self, host_id, lun_id,
+    def get_host_lun_by_ends(self, host_id, lun_id, snap_id=None,
                              use_type=None, fields=None):
         use_type = self.HostLUNTypeEnum_LUN if use_type is None else use_type
-        conditions = (('id', 'lk', '%%%(host)s_%(lun)s%%' %
+        conditions = [('id', 'lk', '%%%(host)s_%(lun)s%%' %
                        {'host': host_id, 'lun': lun_id}),
-                      ('type', 'eq', use_type))
+                      ('type', 'eq', use_type)]
+        if use_type == self.HostLUNTypeEnum_LUN_Snap:
+            conditions.append(('snap.id', 'eq', snap_id))
         return self._filter_by_fields('hostLUN', conditions, fields)
 
     def get_iscsi_portals(self, fields=None):
@@ -499,6 +521,22 @@ class EMCUnityRESTClient(object):
         else:
             data = {'lunParameters': {'hostAccess': host_access_list}}
         err, resp = self._request(lun_modify_url, data)
+        return err, resp
+
+    def attach_snap(self, snap_id, host_id):
+        # Snapshot can be attached to ONLY one host.
+        snap_action_url = (
+            '/api/instances/snap/%s/action/attach' % snap_id)
+        data = {'hostAccess':
+                [{'host': {'id': host_id},
+                  'allowedAccess': self.HostSnapAccessEnum_ReadWrite}]}
+        err, resp = self._request(snap_action_url, data)
+        return err, resp
+
+    def detach_snap(self, snap_id):
+        snap_action_url = (
+            '/api/instances/snap/%s/action/detach' % snap_id)
+        err, resp = self._request(snap_action_url, method='POST')
         return err, resp
 
     def get_snap_by_name(self, snap_name, fields=None):
@@ -611,6 +649,30 @@ class ExposeLUNTask(task.Task):
             self.helper.hide_lun(self.volume, self.lun_data, host_id)
 
 
+class AttachSnapTask(task.Task):
+    def __init__(self, helper, emc_snap):
+        LOG.debug('AttachSnapTask.__init__ %s', emc_snap)
+        super(AttachSnapTask, self).__init__()
+        self.helper = helper
+        self.emc_snap = emc_snap
+
+    def execute(self, host_id):
+        LOG.debug('AttachSnapTask.execute %(snap)s %(host)s'
+                  % {'snap': self.emc_snap,
+                     'host': host_id})
+        self.helper.attach_snap(self.emc_snap, host_id)
+
+    def revert(self, result, host_id, *args, **kwargs):
+        LOG.warning(_LW('AttachSnapTask.revert %(snap)s %(host)s'),
+                    {'snap': self.emc_snap, 'host': host_id})
+        if isinstance(result, failure.Failure):
+            LOG.warning(_LW('AttachSnapTask.revert: Nothing to revert'))
+            return
+        else:
+            LOG.warning(_LW('AttachSnapTask.revert: detach_snap'))
+            self.helper.detach_snap(self.emc_snap)
+
+
 class GetConnectionInfoTask(task.Task):
     def __init__(self, helper, volume, lun_data, connector, *argv, **kwargs):
         LOG.debug('GetConnectionInfoTask.__init__ %(vol)s %(conn)s',
@@ -625,11 +687,39 @@ class GetConnectionInfoTask(task.Task):
         LOG.debug('GetConnectionInfoTask.execute %(vol)s %(conn)s %(host)s',
                   {'vol': self.lun_data, 'conn': self.connector,
                    'host': host_id})
+        snap_id = (None if 'snap_id' not in self.lun_data
+                   else self.lun_data['snap_id'])
         return self.helper.get_connection_info(self.volume,
                                                self.connector,
                                                self.lun_data['currentNode'],
                                                self.lun_data['id'],
-                                               host_id)
+                                               host_id,
+                                               snap_id)
+
+
+def ignore_exception(func, *args, **kwargs):
+    try:
+        func(*args, **kwargs)
+    except Exception as ex:
+        LOG.warning(_LW('Error occurred but ignored. Function: %(func)s, '
+                        'args: %(ar)s, kwargs: %(kw)s, exception: %(ex)s'),
+                    {'func': func.__name__, 'ar': args,
+                     'kw': kwargs, 'ex': ex})
+
+
+@contextlib.contextmanager
+def assure_cleanup(enter_func, exit_func, use_internal, *args, **kwargs):
+    try:
+        LOG.debug('Entering context. Function: %s, args: %s, kwargs: %s',
+                  enter_func.__name__, args, kwargs)
+        enter_return = enter_func(*args, **kwargs)
+        if use_internal:
+            args = (enter_return, )
+        yield enter_return
+    finally:
+        LOG.debug('Exiting context. Function: %s, args: %s, kwargs: %s',
+                  exit_func.__name__, args, kwargs)
+        ignore_exception(exit_func, *args, **kwargs)
 
 
 @decorate_all_methods(log_enter_exit)
@@ -787,20 +877,21 @@ class EMCUnityHelper(object):
         return specs
 
     def _get_qos_specs(self, volume_type):
-        qos_specs_id = (None if not volume_type
-                        else volume_type['qos_specs_id'])
+        specs_id = (None if volume_type is None
+                    else volume_type['qos_specs_id'])
+        specs = (None if volume_type is None
+                 else volume_types.get_volume_type_qos_specs(
+                     volume_type['id']))
         emc_qos = {}
-        if not qos_specs_id:
-            return {}, None
-        if qos_specs_id:
-            qos_specs = volume_type['qos_specs']
-            for qos_spec in qos_specs:
-                emc_qos[qos_spec['key']] = qos_spec['value']
 
-        if emc_qos['consumer'] == QOS_CONSUMER_FRONTEND:
+        if specs_id and specs and specs['qos_specs']:
+            specs = specs['qos_specs']
+
             # We do not handle front-end qos specs
-            return {}, None
-        return emc_qos, qos_specs_id
+            if specs['consumer'] != QOS_CONSUMER_FRONTEND:
+                emc_qos = specs['specs']
+
+        return emc_qos, specs_id
 
     def _load_provider_location(self, provider_location):
         pl_dict = {}
@@ -820,7 +911,7 @@ class EMCUnityHelper(object):
         data = self.client.get_lun_by_id(lun_id, fields)
         if not data:
             raise exception.VolumeBackendAPIException(
-                "Cannot find lun with id : %s" % lun_id)
+                data=_('Cannot find lun with id : {}').format(lun_id))
         return data[0]
 
     def _get_target_storage_pool_name(self, volume):
@@ -947,7 +1038,7 @@ class EMCUnityHelper(object):
         extra_specs = self._get_volumetype_extraspecs(volume)
         qos_specs, qos_specs_id = self._get_qos_specs(volume['volume_type'])
         k = 'storagetype:provisioning'
-        is_thin = False
+        is_thin = True
         if k in extra_specs:
             v = extra_specs[k].lower()
             if v == 'thin':
@@ -971,7 +1062,10 @@ class EMCUnityHelper(object):
             limit_policy_id = limit_policy['id']
         err, lun = self.client.create_lun(
             self._get_target_storage_pool_id(volume), name, size,
-            is_thin=is_thin, limit_policy_id=limit_policy_id)
+            is_thin=is_thin,
+            display_name=(None if 'display_name' not in volume
+                          else volume['display_name']),
+            limit_policy_id=limit_policy_id)
         if err:
             raise exception.VolumeBackendAPIException(data=err['messages'])
 
@@ -990,27 +1084,9 @@ class EMCUnityHelper(object):
         volume['provider_location'] = model_update['provider_location']
         return model_update
 
-    def create_volume_from_snapshot(self, volume, snapshot):
-        # To be implemented with Replication and TaskFlow
-        raise NotImplementedError()
-        pl_dict = {'system': self.storage_serial_number,
-                   'type': 'lun',
-                   'id': 'unknown yet'}
-        model_update = {'provider_location':
-                        self._dumps_provider_location(pl_dict)}
-        volume['provider_location'] = model_update['provider_location']
-        return model_update
-
-    def create_cloned_volume(self, volume, src_vref):
-        # To be implemented with Replication and TaskFlow
-        raise NotImplementedError()
-        pl_dict = {'system': self.storage_serial_number,
-                   'type': 'lun',
-                   'id': 'unknown yet'}
-        model_update = {'provider_location':
-                        self._dumps_provider_location(pl_dict)}
-        volume['provider_location'] = model_update['provider_location']
-        return model_update
+    @staticmethod
+    def _get_lun_id_of_snap(emc_snap):
+        return emc_snap['storageResource']['id']
 
     def _extra_lun_or_snap_id(self, volume):
         if volume.get('provider_location') is None:
@@ -1039,23 +1115,28 @@ class EMCUnityHelper(object):
     def create_snapshot(self, snapshot, name, snap_desc):
         """This function will create a snapshot of the given volume."""
         LOG.debug('Entering EMCUnityHelper.create_snapshot.')
-        lun_id = self._extra_lun_or_snap_id(snapshot['volume'])
+        snap_id = self._create_snapshot(snapshot['volume'],
+                                        name,
+                                        snap_desc)
+        pl_dict = {'system': self.storage_serial_number,
+                   'type': 'snap',
+                   'id': snap_id}
+        model_update = {'provider_location':
+                        self._dumps_provider_location(pl_dict)}
+        snapshot['provider_location'] = model_update['provider_location']
+        return model_update
+
+    def _create_snapshot(self, volume, snap_name, snap_desc=None):
+        lun_id = self._extra_lun_or_snap_id(volume)
         if not lun_id:
-            msg = _('Failed to get LUN ID for volume %s') % \
-                snapshot['volume']['name']
+            msg = _('Failed to get LUN ID for volume %s') % volume['name']
             raise exception.VolumeBackendAPIException(data=msg)
         err, snap_id = self.client.create_snap(
-            lun_id, name, snap_desc)
+            lun_id, snap_name, snap_desc)
         if err:
             raise exception.VolumeBackendAPIException(data=err['messages'])
         else:
-            pl_dict = {'system': self.storage_serial_number,
-                       'type': 'snap',
-                       'id': snap_id}
-            model_update = {'provider_location':
-                            self._dumps_provider_location(pl_dict)}
-            snapshot['provider_location'] = model_update['provider_location']
-            return model_update
+            return snap_id
 
     def delete_snapshot(self, snapshot):
         """Gets the snap id by the snap name and delete the snapshot."""
@@ -1251,6 +1332,32 @@ class EMCUnityHelper(object):
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
 
+    def attach_snap(self, emc_snap, host_id):
+        emc_snap_id = emc_snap['id']
+        if self.lookup_service_instance and self.storage_protocol == 'FC':
+            @lockutils.synchronized('emc-unity-host-' + host_id,
+                                    "emc-unity-host-", True)
+            def _attach_snap():
+                return self.client.attach_snap(emc_snap_id, host_id)
+
+            err, resp = _attach_snap()
+        else:
+            err, resp = self.client.attach_snap(emc_snap_id, host_id)
+        if err:
+            if err['errorCode'] in (0x6000bdc, 100666332):
+                # One snapshot can be attached to ONLY one host,
+                # so cannot figure out the error is caused by attaching snap
+                # to the same host twice (retry) or attaching snap to two
+                # hosts. The later case should raise exception.
+                LOG.warning(_LW('EMC snapshot %(snap)s had been '
+                            'attached to %(host)s.'),
+                            {'snap': emc_snap_id, 'host': host_id})
+                return
+            msg = _('Failed to attach %(snap)s to %(host)s.') % \
+                {'snap': emc_snap_id, 'host': host_id}
+            LOG.error(msg)
+            raise exception.VolumeBackendAPIException(data=msg)
+
     def _get_driver_volume_type(self):
         if self.storage_protocol == 'iSCSI':
             return 'iscsi'
@@ -1270,7 +1377,7 @@ class EMCUnityHelper(object):
                 'target_wwn': target_wwns}
 
     def get_connection_info(self, volume, connector, current_sp_node,
-                            lun_id, host_id):
+                            lun_id, host_id, snap_id=None):
         data = {'target_discovered': True,
                 'target_lun': 'unknown',
                 'volume_id': volume['id']}
@@ -1290,7 +1397,14 @@ class EMCUnityHelper(object):
                     'because no target ports are available in the system.')
             LOG.error(msg)
             raise exception.VolumeBackendAPIException(data=msg)
+
+        if snap_id is None:
+            host_lun_type = self.client.HostLUNTypeEnum_LUN
+        else:
+            host_lun_type = self.client.HostLUNTypeEnum_LUN_Snap
         host_lun = self.client.get_host_lun_by_ends(host_id, lun_id,
+                                                    snap_id,
+                                                    use_type=host_lun_type,
                                                     fields=('hlu',))
         if not host_lun or 'hlu' not in host_lun[0]:
             msg = _('Can not get the hlu information of host %s.') % host_id
@@ -1358,6 +1472,21 @@ class EMCUnityHelper(object):
         flow_engine.run()
         return json.loads(flow_engine.storage.fetch('connection_info'))
 
+    def initialize_connection_snap(self, emc_snap, connector):
+        flow_name = 'initialize_connection_snap'
+        snap_flow = linear_flow.Flow(flow_name)
+
+        lun_data = self.get_lun_by_id(self._get_lun_id_of_snap(emc_snap))
+        lun_data['snap_id'] = emc_snap['id']
+        snap_flow.add(ArrangeHostTask(self, connector),
+                      AttachSnapTask(self, emc_snap),
+                      GetConnectionInfoTask(self, emc_snap, lun_data,
+                                            connector))
+
+        flow_engine = taskflow.engines.load(snap_flow, store={})
+        flow_engine.run()
+        return json.loads(flow_engine.storage.fetch('connection_info'))
+
     def hide_lun(self, volume, lun_data, host_id):
         lun_id = lun_data['id']
         lun_cg = (self._get_group_id_by_name(volume.get('consistencygroup_id'))
@@ -1378,6 +1507,21 @@ class EMCUnityHelper(object):
             msg = _('Failed to hide %(vol)s from host %(host)s '
                     ': %(msg)s.') % {'vol': lun_data['name'],
                                      'host': host_id, 'msg': resp}
+            raise exception.VolumeBackendAPIException(data=msg)
+
+    def detach_snap(self, emc_snap):
+        emc_snap_id = emc_snap['id']
+        attached_host_id = None
+        host_access = emc_snap.get('hostAccess', [])
+        if host_access:
+            attached_host_id = host_access[0].get('host', {}).get('id', '')
+        err, resp = self.client.detach_snap(emc_snap_id)
+        if err:
+            # Detaching snapshot from host more than once will not return
+            # error.
+            msg = _('Failed to detach %(snap)s from host %(host)s '
+                    ': %(msg)s.') % {'snap': emc_snap['name'],
+                                     'host': attached_host_id, 'msg': resp}
             raise exception.VolumeBackendAPIException(data=msg)
 
     def get_fc_zone_info_for_empty_host(self, connector, host_id):
@@ -1412,6 +1556,19 @@ class EMCUnityHelper(object):
             return self.get_fc_zone_info_for_empty_host(connector, host_id)
         else:
             return
+
+    def terminate_connection_snap(self, emc_snap, connector, **kwargs):
+        registered_initiators, orphan_initiators, new_initiator_uids = \
+            self._categorize_initiators(connector)
+        host = self._extract_host(registered_initiators,
+                                  connector['host'])
+        if not host:
+            LOG.warning(_LW("Host using %s is not found."), emc_snap['name'])
+        else:
+            self.detach_snap(emc_snap)
+
+        if self.lookup_service_instance and self.storage_protocol == 'FC':
+            return self.get_fc_zone_info_for_empty_host(connector, host['id'])
 
     def isHostContainsLUNs(self, host_id):
         host = self.client.get_host_by_id(host_id, ('hostLUNs',))
@@ -1550,11 +1707,77 @@ class EMCUnityDriver(san.SanDriver):
     def create_volume(self, volume):
         return self.helper.create_volume(volume)
 
+    def _disconnect_device(self, conn):
+        conn['connector'].disconnect_volume(conn['conn']['data'],
+                                            conn['device'])
+
+    def _create_volume_from_snapshot(self, volume, emc_snap, size_in_m=None):
+        model_update = None
+        try:
+            model_update = self.helper.create_volume(volume)
+            conn_props = utils.brick_get_connector_properties()
+
+            with assure_cleanup(self.helper.initialize_connection_snap,
+                                self.helper.terminate_connection_snap,
+                                False, emc_snap,
+                                conn_props) as src_conn_info, \
+                assure_cleanup(self._connect_device,
+                               self._disconnect_device,
+                               True, src_conn_info) as src_attach_info, \
+                assure_cleanup(self.helper.initialize_connection,
+                               self.helper.terminate_connection,
+                               False, volume,
+                               conn_props) as dest_conn_info, \
+                assure_cleanup(self._connect_device,
+                               self._disconnect_device,
+                               True, dest_conn_info) as dest_attach_info:
+                if size_in_m is None:
+                    # If size is not specified, need to get the size from LUN
+                    # of snapshot.
+                    lun = self.helper.get_lun_by_id(
+                        emc_snap['storageResource']['id'],
+                        fields=('id', 'sizeTotal'))
+                    size_in_m = lun['sizeTotal'] / units.Mi
+                vol_utils.copy_volume(
+                    src_attach_info['device']['path'],
+                    dest_attach_info['device']['path'],
+                    size_in_m,
+                    self.configuration.volume_dd_blocksize)
+        except Exception as ex:
+            if model_update is not None:
+                ignore_exception(self.helper.delete_volume, volume)
+            msg = _('Failed to create cloned volume: {vol_id}, '
+                    'source emc snapshot: {snap_name}. '
+                    'Exception: {msg}').format(vol_id=volume['id'],
+                                               snap_name=emc_snap['name'],
+                                               msg=ex)
+            raise exception.VolumeBackendAPIException(data=msg)
+
+        return model_update
+
     def create_volume_from_snapshot(self, volume, snapshot):
-        return self.helper.create_volume_from_snapshot(volume, snapshot)
+        emc_snap = self.helper.client.get_snap_by_name(
+            snapshot['name'],
+            fields=('id', 'name', 'storageResource', 'hostAccess'))[0]
+        return self._create_volume_from_snapshot(volume, emc_snap)
 
     def create_cloned_volume(self, volume, src_vref):
-        return self.helper.create_cloned_volume(volume, src_vref)
+        """Creates cloned volume.
+
+        1. Take an internal snapshot of source volume, and attach it.
+        2. Create a new volume, and attach it.
+        3. Copy from attached snapshot of step 1 to the volume of step 2.
+        """
+
+        src_snap_name = 'snap_clone_{}'.format(volume['id'])
+        with assure_cleanup(self.helper._create_snapshot,
+                            self.helper.client.delete_snap,
+                            True, src_vref, src_snap_name) as src_snap_id:
+            src_emc_snap = self.helper.client.get_snap_by_id(src_snap_id)
+            LOG.debug('Internal snapshot for clone is created, '
+                      'name: %s, id: %s.', src_snap_name, src_snap_id)
+            return self._create_volume_from_snapshot(
+                volume, src_emc_snap, size_in_m=volume['size'] * units.Ki)
 
     def delete_volume(self, volume):
         return self.helper.delete_volume(volume)
