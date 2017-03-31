@@ -1,7 +1,7 @@
 Dell EMC Unity Cinder driver
 ============================
 
-##IMPORTANT NOTE:
+## IMPORTANT NOTE:
 
 **Please follow the [Driver configuration](#driver-configuration)
 exactly if you are upgrading Unity Cinder driver from version 0.4.1
