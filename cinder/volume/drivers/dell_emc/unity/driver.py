@@ -18,6 +18,7 @@
 from oslo_config import cfg
 from oslo_log import log as logging
 
+from cinder import interface
 from cinder.volume import driver
 from cinder.volume.drivers.dell_emc.unity import adapter
 from cinder.volume.drivers.san.san import san_opts
@@ -28,12 +29,6 @@ LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
 
 UNITY_OPTS = [
-    cfg.StrOpt('storage_protocol',
-               ignore_case=True,
-               default='iscsi',
-               choices=['iscsi', 'fc'],
-               help='Protocol for transferring data between host and '
-               'storage back-end.'),
     cfg.ListOpt('unity_storage_pool_names',
                 default=None,
                 help='A comma-separated list of storage pool names to be '
@@ -46,6 +41,7 @@ UNITY_OPTS = [
 CONF.register_opts(UNITY_OPTS)
 
 
+@interface.volumedriver
 class UnityDriver(driver.ManageableVD,
                   driver.ManageableSnapshotsVD,
                   driver.BaseVD):

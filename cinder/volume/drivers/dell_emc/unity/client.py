@@ -167,8 +167,9 @@ class UnityClient(object):
         try:
             return self.system.get_snap(name=name)
         except storops_ex.UnityResourceNotFoundError as err:
-            msg = _LW("Snapshot %(name)s doesn't exist. Message: %(err)s")
-            LOG.warning(msg, {'name': name, 'err': err})
+            LOG.warning(
+                _LW("Snapshot %(name)s doesn't exist. Message: %(err)s"),
+                {'name': name, 'err': err})
         return None
 
     def create_host(self, name, uids):

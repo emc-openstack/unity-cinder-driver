@@ -22,7 +22,7 @@ distributed Python package
 Version
 -------
 
-0.4.2
+0.4.3
 
 Prerequisites
 -------------
@@ -30,7 +30,7 @@ Prerequisites
 | Software  | Version        |
 |-----------|----------------|
 | Unity OE  | 4.1.X          |
-| OpenStack | Mitaka         |
+| OpenStack | Newton         |
 | storops   | 0.4.7 or newer |
 
 Supported operations

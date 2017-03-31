@@ -70,9 +70,9 @@ def extract_provider_location(provider_location, key):
             if len(fields) == 2 and fields[0] == key:
                 return fields[1]
         else:
-            msg = _LW('"%(key)s" is not found in provider '
-                      'location "%(location)s."')
-            LOG.warning(msg, {'key': key, 'location': provider_location})
+            LOG.warning(_LW('"%(key)s" is not found in provider '
+                            'location "%(location)s."'),
+                        {'key': key, 'location': provider_location})
     else:
         LOG.warning(_LW('Empty provider location received.'))
 
