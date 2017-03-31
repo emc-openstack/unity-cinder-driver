@@ -179,6 +179,13 @@ is disabled) Zone the FC ports of Compute nodes with Unity FC target ports.
 
 Driver options
 --------------
+### Storage pools option
+
+Specify the name list (comma-seperated) of pools to be managed in the driver.
+
+``` sourceCode
+unity_storage_pool_names = pool_a, pool_b
+```
 
 ### FC or iSCSI ports option
 
