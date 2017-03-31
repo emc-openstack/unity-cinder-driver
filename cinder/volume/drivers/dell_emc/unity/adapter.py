@@ -21,8 +21,8 @@ from oslo_log import log as logging
 from oslo_utils import excutils
 
 from cinder import exception
-from cinder import utils as cinder_utils
 from cinder.i18n import _, _LE, _LI
+from cinder import utils as cinder_utils
 from cinder.volume.drivers.dell_emc.unity import client
 from cinder.volume.drivers.dell_emc.unity import utils
 from cinder.volume import utils as vol_utils
@@ -458,7 +458,7 @@ class CommonAdapter(object):
             with excutils.save_and_reraise_exception():
                 utils.ignore_exception(self.delete_volume, volume)
                 LOG.error(_LE('Failed to create cloned volume: %(vol_id)s, '
-                              'from source unity snapshot: %(snap_name)s. '),
+                              'from source unity snapshot: %(snap_name)s.'),
                           {'vol_id': volume.id, 'snap_name': snap.name})
 
         return model_update
