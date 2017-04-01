@@ -18,8 +18,8 @@
 from oslo_config import cfg
 from oslo_log import log as logging
 
+from cinder.volume import driver
 from cinder.volume.drivers.dell_emc.unity import adapter
-from cinder.volume.drivers.san import san
 from cinder.volume.drivers.san.san import san_opts
 from cinder.zonemanager import utils as zm_utils
 
@@ -45,7 +45,10 @@ UNITY_OPTS = [
 CONF.register_opts(UNITY_OPTS)
 
 
-class UnityDriver(san.SanDriver):
+class UnityDriver(driver.TransferVD,
+                  driver.ManageableVD,
+                  driver.ManageableSnapshotsVD,
+                  driver.BaseVD):
     """Unity Driver.
 
     Version history:
