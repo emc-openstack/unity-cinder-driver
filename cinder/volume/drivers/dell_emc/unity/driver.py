@@ -1,4 +1,4 @@
-# Copyright (c) 2016 Dell Inc. or its subsidiaries.
+# Copyright (c) 2017 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -46,16 +46,18 @@ UNITY_OPTS = [
 CONF.register_opts(UNITY_OPTS)
 
 
-class UnityDriver(driver.ManageableVD,
+class UnityDriver(driver.TransferVD,
+                  driver.ManageableVD,
                   driver.ManageableSnapshotsVD,
                   driver.BaseVD):
     """Unity Driver.
 
     Version history:
-        1.0.0 - Initial version
+        00.04.03 - Add TransferVD to base, and fix version number
+        00.04.02 - Initial version
     """
 
-    VERSION = '01.00.00'
+    VERSION = '00.04.03'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
