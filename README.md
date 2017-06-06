@@ -30,7 +30,7 @@ Prerequisites
 | Software  | Version         |
 |-----------|-----------------|
 | Unity OE  | 4.1.X           |
-| OpenStack | Newton          |
+| OpenStack | Liberty         |
 | storops   | 0.4.11 or newer |
 
 Supported operations
