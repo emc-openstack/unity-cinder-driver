@@ -53,9 +53,10 @@ class UnityDriver(driver.TransferVD,
 
     Version history:
         00.03.01 - Back ported.
+        00.03.02 - Add thin clone support
     """
 
-    VERSION = '00.03.01'
+    VERSION = '00.03.02'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"

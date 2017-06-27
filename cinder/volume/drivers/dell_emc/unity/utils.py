@@ -275,11 +275,14 @@ def remove_empty(option, value_list):
 
 
 def match_any(full, patterns):
-    """This function uses python standard `fnmatch` which has thread-safe issue
+    """Thread-safe match based on `fnmatch`.
+
+    This function uses python standard `fnmatch` which has thread-safe issue
     in version pre 2.7.9. `oslo_utils` contains a fixed `fnmatch` but not in
     version 2.5 which is used by the Liberty of OpenStack.
     Thus, just use this function in non multi-thread case, like when driver
-    starts up. Avoid using it in other cases."""
+    starts up. Avoid using it in other cases.
+    """
     matched = list(
         filter(lambda x: any(fnmatch.fnmatchcase(x, p) for p in patterns),
                full))
