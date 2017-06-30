@@ -51,9 +51,10 @@ class UnityDriver(driver.TransferVD,
     Version history:
         00.05.00 - Initial version
         00.05.01 - Backport thin clone from Pike
+        00.05.02 - Fixed bug 170311: temp snapshot for backup was deleted twice
     """
 
-    VERSION = '00.05.01'
+    VERSION = '00.05.02'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
@@ -207,12 +208,18 @@ class UnityDriver(driver.TransferVD,
         return True
 
     def create_export_snapshot(self, context, snapshot, connector):
-        """Creates the snapshot for backup."""
-        return self.adapter.create_snapshot(snapshot)
+        """Creates the mount point of the snapshot for backup.
+
+        Not necessary to create on Unity.
+        """
+        pass
 
     def remove_export_snapshot(self, context, snapshot):
-        """Deletes the snapshot for backup."""
-        self.adapter.delete_snapshot(snapshot)
+        """Deletes the mount point the snapshot for backup.
+
+        Not necessary to create on Unity.
+        """
+        pass
 
     def initialize_connection_snapshot(self, snapshot, connector, **kwargs):
         return self.adapter.initialize_connection_snapshot(snapshot, connector)
