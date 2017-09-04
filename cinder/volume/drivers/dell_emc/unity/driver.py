@@ -50,9 +50,10 @@ class UnityDriver(driver.TransferVD,
 
     Version history:
         00.05.00 - Initial version
+        00.05.01 - Backport thin clone from Pike
     """
 
-    VERSION = '00.05.00'
+    VERSION = '00.05.01'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
