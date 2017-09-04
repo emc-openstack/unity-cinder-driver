@@ -12,6 +12,7 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+
 import unittest
 
 from mock import mock
@@ -21,6 +22,7 @@ from cinder import coordination
 from cinder.tests.unit.volume.drivers.dell_emc.unity \
     import fake_exception as ex
 from cinder.volume.drivers.dell_emc.unity import client
+
 
 ########################
 #
@@ -48,6 +50,7 @@ class MockResource(object):
         self.pool_name = 'Pool0'
         self.host_cache = []
         self.is_thin = None
+        self._storage_resource = None
 
     @property
     def id(self):
@@ -163,11 +166,22 @@ class MockResource(object):
 
     @property
     def storage_resource(self):
-        return MockResource(_id='sr_%s' % self._id,
-                            name='sr_%s' % self.name)
+        if self._storage_resource is None:
+            self._storage_resource = MockResource(_id='sr_%s' % self._id,
+                                                  name='sr_%s' % self.name)
+        return self._storage_resource
+
+    @storage_resource.setter
+    def storage_resource(self, value):
+        self._storage_resource = value
 
     def modify(self, name=None):
         self.name = name
+
+    def thin_clone(self, name, io_limit_policy=None, description=None):
+        if name == 'thin_clone_name_in_use':
+            raise ex.UnityLunNameInUseError
+        return MockResource(_id=name, name=name)
 
 
 class MockResourceList(object):
@@ -208,10 +222,20 @@ class MockSystem(object):
         self.serial_number = 'SYSTEM_SERIAL'
         self.system_version = '4.1.0'
 
+    @property
+    def info(self):
+        mocked_info = mock.Mock()
+        mocked_info.name = self.serial_number
+        return mocked_info
+
     @staticmethod
     def get_lun(_id=None, name=None):
         if _id == 'not_found':
             raise ex.UnityResourceNotFoundError()
+        if _id == 'tc_80':  # for thin clone with extending size
+            lun = MockResource(name=_id, _id=_id)
+            lun.total_size_gb = 7
+            return lun
         return MockResource(name, _id)
 
     @staticmethod
@@ -313,6 +337,26 @@ class ClientTest(unittest.TestCase):
         lun = self.client.create_lun(name, 6, pool, is_thin=False)
         self.assertIsNotNone(lun.is_thin)
         self.assertFalse(lun.is_thin)
+
+    def test_thin_clone_success(self):
+        name = 'tc_77'
+        src_lun = MockResource(_id='id_77')
+        lun = self.client.thin_clone(src_lun, name)
+        self.assertEqual(name, lun.name)
+
+    def test_thin_clone_name_in_used(self):
+        name = 'thin_clone_name_in_use'
+        src_lun = MockResource(_id='id_79')
+        lun = self.client.thin_clone(src_lun, name)
+        self.assertEqual(name, lun.name)
+
+    def test_thin_clone_extend_size(self):
+        name = 'tc_80'
+        src_lun = MockResource(_id='id_80')
+        lun = self.client.thin_clone(src_lun, name, io_limit_policy=None,
+                                     new_size_gb=7)
+        self.assertEqual(name, lun.name)
+        self.assertEqual(7, lun.total_size_gb)
 
     def test_delete_lun_normal(self):
         self.assertIsNone(self.client.delete_lun('lun3'))
