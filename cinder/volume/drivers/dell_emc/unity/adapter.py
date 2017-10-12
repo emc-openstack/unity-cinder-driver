@@ -287,8 +287,9 @@ class CommonAdapter(object):
 
     @cinder_utils.trace
     def _initialize_connection(self, lun_or_snap, connector, vol_id):
-        host = self.client.create_host(connector['host'],
-                                       self.get_connector_uids(connector))
+        host = self.client.create_host(connector['host'])
+        self.client.update_host_initiators(
+            host, self.get_connector_uids(connector))
         hlu = self.client.attach(host, lun_or_snap)
         data = self.get_connection_info(hlu, host, connector)
         data['target_discovered'] = True
@@ -308,7 +309,7 @@ class CommonAdapter(object):
 
     @cinder_utils.trace
     def _terminate_connection(self, lun_or_snap, connector):
-        host = self.client.get_host(connector['host'])
+        host = self.client.create_host(connector['host'])
         self.client.detach(host, lun_or_snap)
 
     @cinder_utils.trace
@@ -565,8 +566,8 @@ class CommonAdapter(object):
                 io_limit_policy=vol_params.io_limit_policy,
                 new_size_gb=vol_params.size)
         except storops_ex.UnityThinCloneLimitExceededError:
-            LOG.info('Number of thin clones of base LUN exceeds system '
-                     'limit, dd-copy a new one and thin clone from it.')
+            LOG.info(_LI('Number of thin clones of base LUN exceeds system '
+                         'limit, dd-copy a new one and thin clone from it.'))
             # Copy via dd if thin clone meets the system limit
             hidden = copy.copy(vol_params)
             hidden.name = 'hidden-%s' % vol_params.name
@@ -738,7 +739,7 @@ class FCAdapter(CommonAdapter):
                 'driver_volume_type': self.driver_volume_type,
                 'data': {}
             }
-            host = self.client.get_host(connector['host'])
+            host = self.client.create_host(connector['host'])
             if len(host.host_luns) == 0:
                 targets = self.client.get_fc_target_info(
                     logged_in_only=True, allowed_ports=self.allowed_ports)
