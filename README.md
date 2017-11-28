@@ -29,14 +29,13 @@ Prerequisites
 
 | Software  | Version         |
 |-----------|-----------------|
-| Unity OE  | 4.1.X           |
+| Unity OE  | 4.1.X or newer  |
 | OpenStack | Liberty         |
-| storops   | 0.4.15 or newer |
+| storops   | 0.5.5 or newer  |
 
 **NOTE**
 
 - Thin clone is supported from Unity OE 4.2.X.
-- Install storops via `pip install storops==0.4.15`. Make sure not to upgrade `requests`.
 
 Supported operations
 --------------------
