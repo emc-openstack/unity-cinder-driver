@@ -29,9 +29,9 @@ Prerequisites
 
 | Software  | Version        |
 |-----------|----------------|
-| Unity OE  | 4.1.X          |
+| Unity OE  | 4.1.X or newer |
 | OpenStack | Mitaka         |
-| storops   | 0.4.7 or newer |
+| storops   | 0.5.5 or newer |
 
 Supported operations
 --------------------
