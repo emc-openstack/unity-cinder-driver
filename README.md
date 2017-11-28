@@ -36,9 +36,9 @@ Prerequisites
 
 | Software  | Version         |
 |-----------|-----------------|
-| Unity OE  | 4.1.X           |
+| Unity OE  | 4.1.X or newer  |
 | OpenStack | Newton          |
-| storops   | 0.4.11 or newer |
+| storops   | 0.5.5 or newer  |
 
 Supported operations
 --------------------
