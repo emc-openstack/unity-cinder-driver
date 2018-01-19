@@ -53,11 +53,13 @@ class UnityDriver(driver.TransferVD,
     """Unity Driver.
 
     Version history:
+        00.04.04 - Fix duplicate hosts created with same name (cherry-pick from
+                   downstream Newton
         00.04.03 - Add TransferVD to base, and fix version number
         00.04.02 - Initial version
     """
 
-    VERSION = '00.04.03'
+    VERSION = '00.04.04'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
