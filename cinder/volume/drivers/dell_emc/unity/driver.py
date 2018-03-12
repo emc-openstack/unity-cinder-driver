@@ -59,9 +59,10 @@ class UnityDriver(driver.ManageableVD,
         1.0.0 - Initial version
         2.0.0 - Add thin clone support
         2.1.0 - Cherry-pick the multi-attach support
+        2.2.0 - Enalbe SSL support
     """
 
-    VERSION = '02.01.00'
+    VERSION = '02.02.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
