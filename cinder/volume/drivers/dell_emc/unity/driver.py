@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -19,6 +19,7 @@ from oslo_config import cfg
 from oslo_log import log as logging
 
 from cinder import interface
+from cinder.volume import configuration
 from cinder.volume import driver
 from cinder.volume.drivers.dell_emc.unity import adapter
 from cinder.volume.drivers.san.san import san_opts
@@ -38,22 +39,21 @@ UNITY_OPTS = [
                 help='A comma-separated list of iSCSI or FC ports to be used. '
                      'Each port can be Unix-style glob expressions.')]
 
-CONF.register_opts(UNITY_OPTS)
+CONF.register_opts(UNITY_OPTS, group=configuration.SHARED_CONF_GROUP)
 
 
 @interface.volumedriver
-class UnityDriver(driver.TransferVD,
-                  driver.ManageableVD,
+class UnityDriver(driver.ManageableVD,
                   driver.ManageableSnapshotsVD,
                   driver.BaseVD):
     """Unity Driver.
 
     Version history:
-        00.05.00 - Initial version
-        00.05.01 - Backport thin clone from Pike
+        1.0.0 - Initial version
+        2.0.0 - Add thin clone support
     """
 
-    VERSION = '00.05.01'
+    VERSION = '02.00.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
@@ -120,7 +120,7 @@ class UnityDriver(driver.TransferVD,
         """Make sure volume is exported."""
         pass
 
-    @zm_utils.AddFCZone
+    @zm_utils.add_fc_zone
     def initialize_connection(self, volume, connector):
         """Initializes the connection and returns connection info.
 
@@ -160,7 +160,7 @@ class UnityDriver(driver.TransferVD,
         """
         return self.adapter.initialize_connection(volume, connector)
 
-    @zm_utils.RemoveFCZone
+    @zm_utils.remove_fc_zone
     def terminate_connection(self, volume, connector, **kwargs):
         """Disallow connection from connector."""
         return self.adapter.terminate_connection(volume, connector)
@@ -207,12 +207,18 @@ class UnityDriver(driver.TransferVD,
         return True
 
     def create_export_snapshot(self, context, snapshot, connector):
-        """Creates the snapshot for backup."""
-        return self.adapter.create_snapshot(snapshot)
+        """Creates the mount point of the snapshot for backup.
+
+        Not necessary to create on Unity.
+        """
+        pass
 
     def remove_export_snapshot(self, context, snapshot):
-        """Deletes the snapshot for backup."""
-        self.adapter.delete_snapshot(snapshot)
+        """Deletes the mount point the snapshot for backup.
+
+        Not necessary to create on Unity.
+        """
+        pass
 
     def initialize_connection_snapshot(self, snapshot, connector, **kwargs):
         return self.adapter.initialize_connection_snapshot(snapshot, connector)

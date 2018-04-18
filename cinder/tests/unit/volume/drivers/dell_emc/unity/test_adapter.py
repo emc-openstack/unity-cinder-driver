@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -139,6 +139,12 @@ class MockClient(object):
         error_ids = ['lun_43', 'snap_0']
         if host.name == 'host1' and lun_or_snap.get_id() in error_ids:
             raise ex.DetachIsCalled()
+
+    @staticmethod
+    def detach_all(lun):
+        error_ids = ['lun_44']
+        if lun.get_id() in error_ids:
+            raise ex.DetachAllIsCalled()
 
     @staticmethod
     def get_iscsi_target_info(allowed_ports=None):
@@ -441,6 +447,13 @@ class CommonAdapterTest(unittest.TestCase):
             self.adapter.terminate_connection(volume, connector)
 
         self.assertRaises(ex.DetachIsCalled, f)
+
+    def test_terminate_connection_force_detach(self):
+        def f():
+            volume = MockOSResource(provider_location='id^lun_44', id='id_44')
+            self.adapter.terminate_connection(volume, None)
+
+        self.assertRaises(ex.DetachAllIsCalled, f)
 
     def test_terminate_connection_snapshot(self):
         def f():

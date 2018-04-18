@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -26,7 +26,7 @@ else:
 
 from cinder import coordination
 from cinder import exception
-from cinder.i18n import _, _LW
+from cinder.i18n import _
 from cinder.volume.drivers.dell_emc.unity import utils
 
 LOG = log.getLogger(__name__)
@@ -113,13 +113,13 @@ class UnityClient(object):
         lun = None
         if lun_id is None and name is None:
             LOG.warning(
-                _LW("Both lun_id and name are None to get LUN. Return None."))
+                "Both lun_id and name are None to get LUN. Return None.")
         else:
             try:
                 lun = self.system.get_lun(_id=lun_id, name=name)
             except storops_ex.UnityResourceNotFoundError:
                 LOG.warning(
-                    _LW("LUN id=%(id)s, name=%(name)s doesn't exist."),
+                    "LUN id=%(id)s, name=%(name)s doesn't exist.",
                     {'id': lun_id, 'name': name})
         return lun
 
@@ -174,17 +174,16 @@ class UnityClient(object):
                        'err': err})
         except storops_ex.UnityDeleteAttachedSnapError as err:
             with excutils.save_and_reraise_exception():
-                LOG.warning(_LW("Failed to delete snapshot %(snap_name)s "
-                                "which is in use. Message: %(err)s"),
+                LOG.warning("Failed to delete snapshot %(snap_name)s "
+                            "which is in use. Message: %(err)s",
                             {'snap_name': snap.name, 'err': err})
 
     def get_snap(self, name=None):
         try:
             return self.system.get_snap(name=name)
         except storops_ex.UnityResourceNotFoundError as err:
-            LOG.warning(
-                _LW("Snapshot %(name)s doesn't exist. Message: %(err)s"),
-                {'name': name, 'err': err})
+            LOG.warning("Snapshot %(name)s doesn't exist. Message: %(err)s",
+                        {'name': name, 'err': err})
         return None
 
     @coordination.synchronized('{self.host}-{name}')
@@ -254,6 +253,15 @@ class UnityClient(object):
         lun_or_snap.update()
         host.detach(lun_or_snap)
 
+    @staticmethod
+    def detach_all(lun):
+        """Detaches a `UnityLun` from all hosts.
+
+        :param lun: `UnityLun` object
+        """
+        lun.update()
+        lun.detach_from(host=None)
+
     def get_ethernet_ports(self):
         return self.system.get_ethernet_port()
 
@@ -274,10 +282,10 @@ class UnityClient(object):
         :param host: the host to which the FC port is registered.
         :param logged_in_only: whether to retrieve only the logged-in port.
 
-        :return the WWN of FC ports. For example, the FC WWN on array is like:
-        50:06:01:60:89:20:09:25:50:06:01:6C:09:20:09:25.
-        This function removes the colons and returns the last 16 bits:
-        5006016C09200925.
+        :return: the WWN of FC ports. For example, the FC WWN on array is like:
+         50:06:01:60:89:20:09:25:50:06:01:6C:09:20:09:25.
+         This function removes the colons and returns the last 16 bits:
+         5006016C09200925.
         """
         wwns = set()
         if logged_in_only:

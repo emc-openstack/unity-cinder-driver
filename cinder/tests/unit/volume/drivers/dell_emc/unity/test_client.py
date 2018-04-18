@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -99,6 +99,11 @@ class MockResource(object):
     def detach(lun_or_snap):
         if lun_or_snap.name == 'detach_failure':
             raise ex.DetachIsCalled()
+
+    @staticmethod
+    def detach_from(host):
+        if host is None:
+            raise ex.DetachFromIsCalled()
 
     def get_hlu(self, lun):
         return self.alu_hlu_map.get(lun.get_id(), None)
@@ -445,6 +450,13 @@ class ClientTest(unittest.TestCase):
             self.client.detach(host, lun)
 
         self.assertRaises(ex.DetachIsCalled, f)
+
+    def test_detach_all(self):
+        def f():
+            lun = MockResource('lun_44')
+            self.client.detach_all(lun)
+
+        self.assertRaises(ex.DetachFromIsCalled, f)
 
     @mock.patch.object(coordination.Coordinator, 'get_lock')
     def test_create_host(self, fake):
