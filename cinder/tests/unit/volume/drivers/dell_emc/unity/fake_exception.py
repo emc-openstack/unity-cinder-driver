@@ -72,3 +72,7 @@ class UnexpectedLunDeletion(Exception):
 
 class AdapterSetupError(Exception):
     pass
+
+
+class HostDeleteIsCalled(Exception):
+    pass

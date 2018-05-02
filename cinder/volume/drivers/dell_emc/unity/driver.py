@@ -41,7 +41,11 @@ UNITY_OPTS = [
     cfg.ListOpt('unity_io_ports',
                 default=None,
                 help='A comma-separated list of iSCSI or FC ports to be used. '
-                     'Each port can be Unix-style glob expressions.')]
+                     'Each port can be Unix-style glob expressions.'),
+    cfg.BoolOpt('remove_empty_host',
+                default=False,
+                help='To remove the host from Unity when the last LUN is '
+                     'detached from it. By default, it is False.')]
 
 CONF.register_opts(UNITY_OPTS)
 
@@ -53,6 +57,7 @@ class UnityDriver(driver.TransferVD,
     """Unity Driver.
 
     Version history:
+        00.04.09 - Support of removing empty host
         00.04.08 - Enalbe SSL support
         00.04.07 - Fixed bug which create volume related logs failed to print
         00.04.06 - Backport thin clone from Newton
@@ -63,7 +68,7 @@ class UnityDriver(driver.TransferVD,
         00.04.02 - Initial version
     """
 
-    VERSION = '00.04.08'
+    VERSION = '00.04.09'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
