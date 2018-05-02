@@ -37,7 +37,11 @@ UNITY_OPTS = [
     cfg.ListOpt('unity_io_ports',
                 default=None,
                 help='A comma-separated list of iSCSI or FC ports to be used. '
-                     'Each port can be Unix-style glob expressions.')]
+                     'Each port can be Unix-style glob expressions.'),
+    cfg.BoolOpt('remove_empty_host',
+                default=False,
+                help='To remove the host from Unity when the last LUN is '
+                     'detached from it. By default, it is False.')]
 
 CONF.register_opts(UNITY_OPTS, group=configuration.SHARED_CONF_GROUP)
 

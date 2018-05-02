@@ -138,6 +138,8 @@ class CommonAdapter(object):
         self.storage_pools_map = None
         self._client = None
         self.allowed_ports = None
+        self.remove_empty_host = False
+        self.to_lock_host = False
 
     def do_setup(self, driver, conf):
         self.driver = driver
@@ -165,6 +167,9 @@ class CommonAdapter(object):
         self.storage_pools_map = self.get_managed_pools()
 
         self.allowed_ports = self.validate_ports(self.config.unity_io_ports)
+
+        self.remove_empty_host = self.config.remove_empty_host
+        self.to_lock_host = self.remove_empty_host
 
         group_name = (self.config.config_group if self.config.config_group
                       else 'DEFAULT')
@@ -285,12 +290,26 @@ class CommonAdapter(object):
         else:
             self.client.delete_lun(lun_id)
 
+    def _create_host_and_attach(self, host_name, lun_or_snap):
+        @utils.lock_if(self.to_lock_host, '{lock_name}')
+        def _lock_helper(lock_name):
+            if not self.to_lock_host:
+                host = self.client.create_host(host_name)
+            else:
+                # use the lock in the decorator
+                host = self.client.create_host_wo_lock(host_name)
+            hlu = self.client.attach(host, lun_or_snap)
+            return host, hlu
+
+        return _lock_helper('{unity}-{host}'.format(unity=self.client.host,
+                                                    host=host_name))
+
     @cinder_utils.trace
     def _initialize_connection(self, lun_or_snap, connector, vol_id):
-        host = self.client.create_host(connector['host'])
+        host, hlu = self._create_host_and_attach(connector['host'],
+                                                 lun_or_snap)
         self.client.update_host_initiators(
             host, self.get_connector_uids(connector))
-        hlu = self.client.attach(host, lun_or_snap)
         data = self.get_connection_info(hlu, host, connector)
         data['target_discovered'] = True
         if vol_id is not None:
@@ -307,14 +326,34 @@ class CommonAdapter(object):
         lun = self.client.get_lun(lun_id=self.get_lun_id(volume))
         return self._initialize_connection(lun, connector, volume.id)
 
+    def _detach_and_delete_host(self, host_name, lun_or_snap):
+        @utils.lock_if(self.to_lock_host, '{lock_name}')
+        def _lock_helper(lock_name):
+            # Only get the host from cache here
+            host = self.client.create_host_wo_lock(host_name)
+            self.client.detach(host, lun_or_snap)
+            host.update()
+            if self.remove_empty_host and not host.host_luns:
+                self.client.delete_host_wo_lock(host)
+            return host.host_luns is None or len(host.host_luns) == 0
+
+        return _lock_helper('{unity}-{host}'.format(unity=self.client.host,
+                                                    host=host_name))
+
+    @staticmethod
+    def terminate_return_data(need_to_return, connector):
+        # No return data from terminate_connection for iSCSI driver
+        return None
+
     @cinder_utils.trace
     def _terminate_connection(self, lun_or_snap, connector):
         is_force_detach = connector is None
         if is_force_detach:
             self.client.detach_all(lun_or_snap)
+            return None
         else:
-            host = self.client.create_host(connector['host'])
-            self.client.detach(host, lun_or_snap)
+            flag = self._detach_and_delete_host(connector['host'], lun_or_snap)
+            return self.terminate_return_data(flag, connector)
 
     @cinder_utils.trace
     def terminate_connection(self, volume, connector):
@@ -736,24 +775,21 @@ class FCAdapter(CommonAdapter):
         return data
 
     @cinder_utils.trace
-    def _terminate_connection(self, lun_or_snap, connector):
+    def terminate_return_data(self, need_to_return, connector):
         # For FC, terminate_connection needs to return data to zone manager
         # which would clean the zone based on the data.
-        super(FCAdapter, self)._terminate_connection(lun_or_snap, connector)
-
-        ret = None
         if self.auto_zone_enabled:
             ret = {
                 'driver_volume_type': self.driver_volume_type,
                 'data': {}
             }
-            host = self.client.create_host(connector['host'])
-            if not host.host_luns:
+            if need_to_return:
                 targets = self.client.get_fc_target_info(
                     logged_in_only=True, allowed_ports=self.allowed_ports)
                 ret['data'] = self._get_fc_zone_info(connector['wwpns'],
                                                      targets)
-        return ret
+            return ret
+        return None
 
     def _get_fc_zone_info(self, initiator_wwns, target_wwns):
         mapping = self.lookup_service.get_device_mapping_from_network(
