@@ -3,16 +3,20 @@ Dell EMC Unity Cinder driver
 
 ## IMPORTANT NOTE:
 
-**Please follow the [Driver configuration](#driver-configuration)
+1. **Please follow the [Driver configuration](#driver-configuration)
 exactly if you are upgrading Unity Cinder driver from version 0.4.1
 (and before), or newly installing Unity Cinder driver.**
 
+2. **For who is using Rocky(or later) downstream, stop reading this doc
+and go to 
+[official doc downstream version](./doc/source/configuration/block-storage/drivers/dell-emc-unity-driver.rst).**
+
 Version mapping
 ---------------
-|       | Liberty | Mitaka | Newton | Ocata | Pike   | Queens |
-|-------|---------|--------|--------|-------|--------|--------|
-| Unity | 0.3.x   | 0.4.x  | 0.5.x  | 1.x.x | 2.x.x  | 3.x.x  |
-| VNX   | 6.x.x   | 7.x.x  | 8.x.x  | 9.x.x | 10.x.x | 11.x.x |
+|       | Liberty | Mitaka | Newton | Ocata | Pike   | Queens | Rocky  |
+|-------|---------|--------|--------|-------|--------|--------|--------|
+| Unity | 0.3.x   | 0.4.x  | 0.5.x  | 1.x.x | 2.x.x  | 3.x.x  | 4.x.x  |
+| VNX   | 6.x.x   | 7.x.x  | 8.x.x  | 9.x.x | 10.x.x | 11.x.x | 12.x.x |
 
 License
 -------
@@ -29,7 +33,7 @@ distributed Python package
 Version
 -------
 
-0.5.0
+4.1.0
 
 Prerequisites
 -------------
@@ -38,7 +42,7 @@ Prerequisites
 |-----------|-----------------|
 | Unity OE  | 4.1.X or newer  |
 | OpenStack | Newton          |
-| storops   | 0.5.5 or newer  |
+| storops   | 0.5.9 or newer  |
 
 Supported operations
 --------------------

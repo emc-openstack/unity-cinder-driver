@@ -1,0 +1,7 @@
+---
+features:
+  - |
+    Dell EMC Unity driver: Add consistent group support. The supported
+    operations are: create/delete consistent groups, add volumes to and remove
+    volumes from consistent groups, create/delete consistent group snapshots,
+    create consistent groups from snapshots, clone consistent groups.

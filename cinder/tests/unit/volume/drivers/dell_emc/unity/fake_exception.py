@@ -84,3 +84,7 @@ class AdapterSetupError(Exception):
 
 class HostDeleteIsCalled(Exception):
     pass
+
+
+class UnityConsistencyGroupNameInUseError(StoropsException):
+    pass

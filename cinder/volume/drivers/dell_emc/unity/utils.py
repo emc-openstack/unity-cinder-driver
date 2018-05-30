@@ -303,3 +303,19 @@ def lock_if(condition, lock_name):
         return coordination.synchronized(lock_name)
     else:
         return functools.partial
+
+
+def append_capabilities(func):
+    capabilities = {
+        'thin_provisioning_support': True,
+        'thick_provisioning_support': False,
+        'consistent_group_snapshot_enabled': True
+    }
+
+    @six.wraps(func)
+    def _inner(*args, **kwargs):
+        output = func(*args, **kwargs)
+        output.update(capabilities)
+        return output
+
+    return _inner
