@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 - 2018 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,12 +15,12 @@
 
 import contextlib
 import functools
-import unittest
 
 import mock
 from oslo_utils import units
 
 from cinder import exception
+from cinder import test
 from cinder.tests.unit.volume.drivers.dell_emc.unity \
     import fake_exception as ex
 from cinder.tests.unit.volume.drivers.dell_emc.unity import test_client
@@ -43,8 +43,9 @@ class MockConfig(object):
         self.san_ip = '1.2.3.4'
         self.san_login = 'user'
         self.san_password = 'pass'
-        self.driver_ssl_cert_verify = False
+        self.driver_ssl_cert_verify = True
         self.driver_ssl_cert_path = None
+        self.remove_empty_host = False
 
     def safe_get(self, name):
         return getattr(self, name)
@@ -70,6 +71,7 @@ class MockDriver(object):
 class MockClient(object):
     def __init__(self):
         self._system = test_client.MockSystem()
+        self.host = '10.10.10.10'  # fake unity IP
 
     @staticmethod
     def get_pools():
@@ -131,6 +133,15 @@ class MockClient(object):
         return test_client.MockResource(name=name)
 
     @staticmethod
+    def create_host_wo_lock(name):
+        return test_client.MockResource(name=name)
+
+    @staticmethod
+    def delete_host_wo_lock(host):
+        if host.name == 'empty-host':
+            raise ex.HostDeleteIsCalled()
+
+    @staticmethod
     def attach(host, lun_or_snap):
         return 10
 
@@ -139,6 +150,12 @@ class MockClient(object):
         error_ids = ['lun_43', 'snap_0']
         if host.name == 'host1' and lun_or_snap.get_id() in error_ids:
             raise ex.DetachIsCalled()
+
+    @staticmethod
+    def detach_all(lun):
+        error_ids = ['lun_44']
+        if lun.get_id() in error_ids:
+            raise ex.DetachAllIsCalled()
 
     @staticmethod
     def get_iscsi_target_info(allowed_ports=None):
@@ -191,6 +208,9 @@ class MockClient(object):
     @property
     def system(self):
         return self._system
+
+    def restore_snapshot(self, snap_name):
+        return test_client.MockResource(name="back_snap")
 
 
 class MockLookupService(object):
@@ -329,8 +349,9 @@ class IdMatcher(object):
 ########################
 
 @mock.patch.object(adapter, 'storops_ex', new=ex)
-class CommonAdapterTest(unittest.TestCase):
+class CommonAdapterTest(test.TestCase):
     def setUp(self):
+        super(CommonAdapterTest, self).setUp()
         self.adapter = mock_adapter(adapter.CommonAdapter)
 
     def test_get_managed_pools(self):
@@ -402,7 +423,7 @@ class CommonAdapterTest(unittest.TestCase):
         self.assertEqual('1.2.3.4', self.adapter.ip)
         self.assertEqual('user', self.adapter.username)
         self.assertEqual('pass', self.adapter.password)
-        self.assertFalse(self.adapter.array_cert_verify)
+        self.assertTrue(self.adapter.array_cert_verify)
         self.assertIsNone(self.adapter.array_ca_cert_path)
 
     def test_do_setup_version_before_4_1(self):
@@ -442,6 +463,13 @@ class CommonAdapterTest(unittest.TestCase):
 
         self.assertRaises(ex.DetachIsCalled, f)
 
+    def test_terminate_connection_force_detach(self):
+        def f():
+            volume = MockOSResource(provider_location='id^lun_44', id='id_44')
+            self.adapter.terminate_connection(volume, None)
+
+        self.assertRaises(ex.DetachAllIsCalled, f)
+
     def test_terminate_connection_snapshot(self):
         def f():
             connector = {'host': 'host1'}
@@ -449,6 +477,16 @@ class CommonAdapterTest(unittest.TestCase):
             self.adapter.terminate_connection_snapshot(snap, connector)
 
         self.assertRaises(ex.DetachIsCalled, f)
+
+    def test_terminate_connection_remove_empty_host(self):
+        self.adapter.remove_empty_host = True
+
+        def f():
+            connector = {'host': 'empty-host'}
+            vol = MockOSResource(provider_location='id^lun_45', id='id_45')
+            self.adapter.terminate_connection(vol, connector)
+
+        self.assertRaises(ex.HostDeleteIsCalled, f)
 
     def test_manage_existing_by_name(self):
         ref = {'source-id': 12}
@@ -685,9 +723,15 @@ class CommonAdapterTest(unittest.TestCase):
             config.unity_io_ports = ['', '   ']
             self.adapter.normalize_config(config)
 
+    def test_restore_snapshot(self):
+        volume = MockOSResource(id='1', name='vol_1')
+        snapshot = MockOSResource(id='2', name='snap_1')
+        self.adapter.restore_snapshot(volume, snapshot)
 
-class FCAdapterTest(unittest.TestCase):
+
+class FCAdapterTest(test.TestCase):
     def setUp(self):
+        super(FCAdapterTest, self).setUp()
         self.adapter = mock_adapter(adapter.FCAdapter)
 
     def test_setup(self):
@@ -772,6 +816,33 @@ class FCAdapterTest(unittest.TestCase):
         target_wwn = ['100000051e55a100', '100000051e55a121']
         self.assertListEqual(target_wwn, data['target_wwn'])
 
+    def test_terminate_connection_auto_zone_enabled_none_host_luns(self):
+        connector = {'host': 'host-no-host_luns', 'wwpns': 'abcdefg'}
+        volume = MockOSResource(provider_location='id^lun_41', id='id_41')
+        ret = self.adapter.terminate_connection(volume, connector)
+        self.assertEqual('fibre_channel', ret['driver_volume_type'])
+        data = ret['data']
+        target_map = {
+            '200000051e55a100': ('100000051e55a100', '100000051e55a121'),
+            '200000051e55a121': ('100000051e55a100', '100000051e55a121')}
+        self.assertDictEqual(target_map, data['initiator_target_map'])
+        target_wwn = ['100000051e55a100', '100000051e55a121']
+        self.assertListEqual(target_wwn, data['target_wwn'])
+
+    def test_terminate_connection_remove_empty_host_return_data(self):
+        self.adapter.remove_empty_host = True
+        connector = {'host': 'empty-host-return-data', 'wwpns': 'abcdefg'}
+        volume = MockOSResource(provider_location='id^lun_41', id='id_41')
+        ret = self.adapter.terminate_connection(volume, connector)
+        self.assertEqual('fibre_channel', ret['driver_volume_type'])
+        data = ret['data']
+        target_map = {
+            '200000051e55a100': ('100000051e55a100', '100000051e55a121'),
+            '200000051e55a121': ('100000051e55a100', '100000051e55a121')}
+        self.assertDictEqual(target_map, data['initiator_target_map'])
+        target_wwn = ['100000051e55a100', '100000051e55a121']
+        self.assertListEqual(target_wwn, data['target_wwn'])
+
     def test_validate_ports_whitelist_none(self):
         ports = self.adapter.validate_ports(None)
         self.assertEqual(set(('spa_iom_0_fc0', 'spa_iom_0_fc1')), set(ports))
@@ -799,8 +870,9 @@ class FCAdapterTest(unittest.TestCase):
             self.adapter.validate_ports(['spa_iom*', 'spc_invalid'])
 
 
-class ISCSIAdapterTest(unittest.TestCase):
+class ISCSIAdapterTest(test.TestCase):
     def setUp(self):
+        super(ISCSIAdapterTest, self).setUp()
         self.adapter = mock_adapter(adapter.ISCSIAdapter)
 
     def test_iscsi_protocol(self):

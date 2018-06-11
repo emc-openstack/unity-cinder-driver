@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -58,6 +58,14 @@ class DetachIsCalled(Exception):
     pass
 
 
+class DetachAllIsCalled(Exception):
+    pass
+
+
+class DetachFromIsCalled(Exception):
+    pass
+
+
 class LunDeleteIsCalled(Exception):
     pass
 
@@ -71,4 +79,8 @@ class UnexpectedLunDeletion(Exception):
 
 
 class AdapterSetupError(Exception):
+    pass
+
+
+class HostDeleteIsCalled(Exception):
     pass
