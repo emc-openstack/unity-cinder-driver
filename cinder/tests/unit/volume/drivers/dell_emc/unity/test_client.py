@@ -50,6 +50,7 @@ class MockResource(object):
         self.pool_name = 'Pool0'
         self._storage_resource = None
         self.host_cache = []
+        self.is_all_flash = True
         self.description = None
         self.luns = None
         self.lun = None
@@ -116,7 +117,8 @@ class MockResource(object):
         return self.alu_hlu_map.get(lun.get_id(), None)
 
     @staticmethod
-    def create_lun(lun_name, size_gb, description=None, io_limit_policy=None):
+    def create_lun(lun_name, size_gb, description=None, io_limit_policy=None,
+                   is_compression=None):
         if lun_name == 'in_use':
             raise ex.UnityLunNameInUseError()
         ret = MockResource(lun_name, 'lun_2')

@@ -76,14 +76,17 @@ class UnityDriver(driver.ManageableVD,
         3.1.0 - Support revert to snapshot API
         4.0.0 - Support remove empty host
         4.1.0 - Support generic group and consistent group
-        4.2.0 - Fixes bug 1879705 to make sure lun could be deleted
-                even though the lun has hosts accessed.
-        4.3.0 - Support new QoS keys
+        4.2.0 - Fixes bug 1879705 to make sure lun could be deleted even
+                though the lun has hosts accessed. (cherry pick from
+                downstream train)
+        4.3.0 - Support new QoS keys (cherry pick from downstream train)
         4.4.0 - Fixes bug 1883677 to convert the value of total_bytes_sec
-                to KBPS to set correct bandwidth
+                to KBPS to set correct bandwidth (cherry pick from
+                downstream train)
+        4.5.0 - Support compressed volume (cherry pick from upstream rocky)
     """
 
-    VERSION = '04.04.00'
+    VERSION = '04.05.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"

@@ -59,6 +59,7 @@ class VolumeParams(object):
                              else volume.display_name)
         self._pool = None
         self._io_limit_policy = None
+        self._is_compressed = None
         self._is_in_cg = None
 
     @property
@@ -112,6 +113,20 @@ class VolumeParams(object):
         self._io_limit_policy = value
 
     @property
+    def is_compressed(self):
+        if self._is_compressed is None:
+            provision = utils.get_extra_spec(self._volume, 'provisioning:type')
+            compression = utils.get_extra_spec(self._volume,
+                                               'compression_support')
+            if provision == 'compressed' and compression == '<is> True':
+                self._is_compressed = True
+        return self._is_compressed
+
+    @is_compressed.setter
+    def is_compressed(self, value):
+        self._is_compressed = value
+
+    @property
     def is_in_cg(self):
         if self._is_in_cg is None:
             self._is_in_cg = (
@@ -130,6 +145,7 @@ class VolumeParams(object):
                 self.name == other.name and
                 self.size == other.size and
                 self.io_limit_policy == other.io_limit_policy and
+                self.is_compressed == other.is_compressed and
                 self.is_in_cg == other.is_in_cg and
                 self.cg_id == other.cg_id)
 
@@ -293,17 +309,20 @@ class CommonAdapter(object):
             'description': params.description,
             'pool': params.pool,
             'io_limit_policy': params.io_limit_policy,
+            'is_compressed': params.is_compressed,
             'cg_id': params.cg_id}
 
         LOG.info('Create Volume: %(name)s, size: %(size)s, description: '
                  '%(description)s, pool: %(pool)s, io limit policy: '
-                 '%(io_limit_policy)s, %(cg_id)s.', log_params)
+                 '%(io_limit_policy)s, compressed: %(is_compressed)s, '
+                 'cg_group: %(cg_id)s.', log_params)
 
         lun = self.client.create_lun(name=params.name,
                                      size=params.size,
                                      pool=params.pool,
                                      description=params.description,
-                                     io_limit_policy=params.io_limit_policy)
+                                     io_limit_policy=params.io_limit_policy,
+                                     is_compressed=params.is_compressed)
         if params.cg_id:
             LOG.debug('Adding lun %(lun)s to cg %(cg)s.',
                       {'lun': lun.get_id(), 'cg': params.cg_id})
@@ -451,6 +470,7 @@ class CommonAdapter(object):
             'location_info': ('%(pool_name)s|%(array_serial)s' %
                               {'pool_name': pool.name,
                                'array_serial': self.serial_number}),
+            'compression_support': pool.is_all_flash,
             'max_over_subscription_ratio': (
                 self.max_over_subscription_ratio)}
 
@@ -605,7 +625,8 @@ class CommonAdapter(object):
         dest_lun = self.client.create_lun(
             name=vol_params.name, size=vol_params.size, pool=vol_params.pool,
             description=vol_params.description,
-            io_limit_policy=vol_params.io_limit_policy)
+            io_limit_policy=vol_params.io_limit_policy,
+            is_compressed=vol_params.is_compressed)
         src_id = src_snap.get_id()
         try:
             conn_props = cinder_utils.brick_get_connector_properties()
