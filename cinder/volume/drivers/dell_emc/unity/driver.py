@@ -69,9 +69,10 @@ class UnityDriver(driver.ManageableVD,
                 to KBPS to set correct bandwidth (cherry pick from
                 downstream train)
         2.7.0 - Support thick volume (cherry pick from downstream queens)
+        2.8.0 - Support compressed volume (cherry pick from upstream rocky)
     """
 
-    VERSION = '02.07.00'
+    VERSION = '02.08.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
