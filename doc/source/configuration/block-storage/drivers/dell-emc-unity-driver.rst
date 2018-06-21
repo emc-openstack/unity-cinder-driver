@@ -23,6 +23,7 @@ Supported operations
 ~~~~~~~~~~~~~~~~~~~~
 
 - Create, delete, attach, and detach volumes.
+- Create, delete, attach, and detach compressed volumes.
 - Create, list, and delete volume snapshots.
 - Create a volume from a snapshot.
 - Copy an image to a volume.
@@ -243,6 +244,25 @@ Thin and thick provisioning
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Only thin volume provisioning is supported in Unity volume driver.
+
+
+Compressed volume support
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Unity driver supports ``compressed volume`` creation, modification and
+deletion. In order to create a compressed volume, a volume type which
+enables compression support needs to be created first:
+
+.. code-block:: console
+
+   $ openstack volume type create CompressedVolumeType
+   $ openstack volume type set --property provisioning:type=compressed --property compression_support='<is> True' CompressedVolumeType
+
+Then create volume and specify the new created volume type.
+
+.. note:: In Unity, only All-Flash pools support compressed volume, for the
+          other type of pools, "'compression_support': False" will be
+          returned when getting pool stats.
 
 
 QoS support
