@@ -69,9 +69,10 @@ class UnityDriver(driver.ManageableVD,
                 unity_storage_pool_names are empty
         3.1.5 - Cherry-pick the fix for 1773305 to return the targets which
                 connect to the logged-out initiators
+        3.2.0 - Cherry-pick the thick volume support from upstream
     """
 
-    VERSION = '03.01.05'
+    VERSION = '03.02.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
