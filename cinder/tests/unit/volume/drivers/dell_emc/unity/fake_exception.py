@@ -86,5 +86,13 @@ class HostDeleteIsCalled(Exception):
     pass
 
 
+class UnityThinCloneNotAllowedError(StoropsException):
+    pass
+
+
+class SystemAPINotSupported(StoropsException):
+    pass
+
+
 class UnityConsistencyGroupNameInUseError(StoropsException):
     pass
