@@ -57,8 +57,8 @@ class UnityClient(object):
         return self.system.serial_number
 
     def create_lun(self, name, size, pool, description=None,
-                   io_limit_policy=None, is_compressed=None,
-                   cg_name=None):
+                   io_limit_policy=None, is_thin=None,
+                   is_compressed=None, cg_name=None):
         """Creates LUN on the Unity system.
 
         :param name: lun name
@@ -66,6 +66,7 @@ class UnityClient(object):
         :param pool: UnityPool object represent to pool to place the lun
         :param description: lun description
         :param io_limit_policy: io limit on the LUN
+        :param is_thin: if False, a thick LUN will be created
         :param is_compressed: is compressed LUN enabled
         :return: UnityLun object
         """
@@ -73,6 +74,7 @@ class UnityClient(object):
             lun = pool.create_lun(lun_name=name, size_gb=size,
                                   description=description,
                                   io_limit_policy=io_limit_policy,
+                                  is_thin=is_thin,
                                   is_compression=is_compressed)
         except storops_ex.UnityLunNameInUseError:
             LOG.debug("LUN %s already exists. Return the existing one.",

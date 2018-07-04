@@ -310,7 +310,7 @@ def lock_if(condition, lock_name):
 def append_capabilities(func):
     capabilities = {
         'thin_provisioning_support': True,
-        'thick_provisioning_support': False,
+        'thick_provisioning_support': True,
         'consistent_group_snapshot_enabled': True
     }
 

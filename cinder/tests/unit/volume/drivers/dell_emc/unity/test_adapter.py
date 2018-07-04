@@ -80,8 +80,12 @@ class MockClient(object):
 
     @staticmethod
     def create_lun(name, size, pool, description=None, io_limit_policy=None,
-                   is_compressed=None):
-        return test_client.MockResource(_id=name, name=name)
+                   is_thin=None, is_compressed=None):
+        lun_id = name
+        if is_thin is not None and not is_thin:
+            lun_id += '_thick'
+
+        return test_client.MockResource(_id=lun_id, name=name)
 
     @staticmethod
     def get_lun(name=None, lun_id=None):
@@ -200,6 +204,8 @@ class MockClient(object):
         if (obj.name, name) in (
                 ('snap_61', 'lun_60'), ('lun_63', 'lun_60')):
             return test_client.MockResource(_id=name)
+        elif (obj.name, name) in (('snap_71', 'lun_70'), ('lun_72', 'lun_70')):
+            raise ex.UnityThinCloneNotAllowedError()
         else:
             raise ex.UnityThinCloneLimitExceededError
 
@@ -239,8 +245,7 @@ def mock_adapter(driver_clz):
     ret = driver_clz()
     ret._client = MockClient()
     with mock.patch('cinder.volume.drivers.dell_emc.unity.adapter.'
-                    'CommonAdapter.validate_ports'), \
-            patch_storops():
+                    'CommonAdapter.validate_ports'), patch_storops():
         ret.do_setup(MockDriver(), MockConfig())
     ret.lookup_service = MockLookupService()
     return ret
@@ -397,6 +402,15 @@ class CommonAdapterTest(test.TestCase):
         self.assertEqual(expected, ret['provider_location'])
 
     @patch_for_unity_adapter
+    def test_create_volume_thick(self):
+        volume = MockOSResource(name='lun_3', size=5, host='unity#pool1',
+                                group=None, volume_type_id='thick')
+        ret = self.adapter.create_volume(volume)
+
+        expected = get_lun_pl('lun_3_thick')
+        self.assertEqual(expected, ret['provider_location'])
+
+    @patch_for_unity_adapter
     def test_create_compressed_volume(self):
         volume_type = MockOSResource(
             extra_specs={'compression_support': '<is> True'})
@@ -444,7 +458,7 @@ class CommonAdapterTest(test.TestCase):
         self.assertEqual(2, stats['free_capacity_gb'])
         self.assertEqual(300, stats['max_over_subscription_ratio'])
         self.assertEqual(5, stats['reserved_percentage'])
-        self.assertFalse(stats['thick_provisioning_support'])
+        self.assertTrue(stats['thick_provisioning_support'])
         self.assertTrue(stats['thin_provisioning_support'])
         self.assertTrue(stats['compression_support'])
         self.assertTrue(stats['consistent_group_snapshot_enabled'])
@@ -454,7 +468,7 @@ class CommonAdapterTest(test.TestCase):
         self.assertEqual('backend', stats['volume_backend_name'])
         self.assertEqual('unknown', stats['storage_protocol'])
         self.assertTrue(stats['thin_provisioning_support'])
-        self.assertFalse(stats['thick_provisioning_support'])
+        self.assertTrue(stats['thick_provisioning_support'])
         self.assertTrue(stats['consistent_group_snapshot_enabled'])
         self.assertEqual(1, len(stats['pools']))
 
@@ -731,6 +745,20 @@ class CommonAdapterTest(test.TestCase):
                                                               'DD_COPY',
                                                               new_dd_lun)
         self.assertEqual(IdMatcher(test_client.MockResource(_id=lun_id)), ret)
+
+    @patch_for_unity_adapter
+    def test_thin_clone_thick(self):
+        lun_id = 'lun_70'
+        src_snap_id = 'snap_71'
+        volume = MockOSResource(name=lun_id, id=lun_id, size=1,
+                                provider_location=get_snap_lun_pl(lun_id))
+        src_snap = test_client.MockResource(name=src_snap_id, _id=src_snap_id)
+        new_dd_lun = test_client.MockResource(name='lun_73')
+        with patch_storops(), patch_dd_copy(new_dd_lun) as dd:
+            vol_params = adapter.VolumeParams(self.adapter, volume)
+            ret = self.adapter._thin_clone(vol_params, src_snap)
+            dd.assert_called_with(vol_params, src_snap, src_lun=None)
+        self.assertEqual(ret, new_dd_lun)
 
     def test_extend_volume_error(self):
         def f():

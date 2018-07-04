@@ -59,6 +59,7 @@ class VolumeParams(object):
                              else volume.display_name)
         self._pool = None
         self._io_limit_policy = None
+        self._is_thick = None
         self._is_compressed = None
         self._is_in_cg = None
 
@@ -113,6 +114,15 @@ class VolumeParams(object):
         self._io_limit_policy = value
 
     @property
+    def is_thick(self):
+        if self._is_thick is None:
+            provision = utils.get_extra_spec(self._volume, 'provisioning:type')
+            support = utils.get_extra_spec(self._volume,
+                                           'thick_provisioning_support')
+            self._is_thick = (provision == 'thick' and support == '<is> True')
+        return self._is_thick
+
+    @property
     def is_compressed(self):
         if self._is_compressed is None:
             provision = utils.get_extra_spec(self._volume, 'provisioning:type')
@@ -145,6 +155,7 @@ class VolumeParams(object):
                 self.name == other.name and
                 self.size == other.size and
                 self.io_limit_policy == other.io_limit_policy and
+                self.is_thick == other.is_thick and
                 self.is_compressed == other.is_compressed and
                 self.is_in_cg == other.is_in_cg and
                 self.cg_id == other.cg_id)
@@ -309,20 +320,25 @@ class CommonAdapter(object):
             'description': params.description,
             'pool': params.pool,
             'io_limit_policy': params.io_limit_policy,
+            'is_thick': params.is_thick,
             'is_compressed': params.is_compressed,
             'cg_id': params.cg_id}
 
         LOG.info('Create Volume: %(name)s, size: %(size)s, description: '
                  '%(description)s, pool: %(pool)s, io limit policy: '
-                 '%(io_limit_policy)s, compressed: %(is_compressed)s, '
-                 'cg_group: %(cg_id)s.', log_params)
+                 '%(io_limit_policy)s, thick: %(is_thick)s, '
+                 'compressed: %(is_compressed)s, cg_group: %(cg_id)s.',
+                 log_params)
 
-        lun = self.client.create_lun(name=params.name,
-                                     size=params.size,
-                                     pool=params.pool,
-                                     description=params.description,
-                                     io_limit_policy=params.io_limit_policy,
-                                     is_compressed=params.is_compressed)
+        lun = self.client.create_lun(
+            name=params.name,
+            size=params.size,
+            pool=params.pool,
+            description=params.description,
+            io_limit_policy=params.io_limit_policy,
+            is_thin=False if params.is_thick else None,
+            is_compressed=params.is_compressed)
+
         if params.cg_id:
             LOG.debug('Adding lun %(lun)s to cg %(cg)s.',
                       {'lun': lun.get_id(), 'cg': params.cg_id})
@@ -626,6 +642,7 @@ class CommonAdapter(object):
             name=vol_params.name, size=vol_params.size, pool=vol_params.pool,
             description=vol_params.description,
             io_limit_policy=vol_params.io_limit_policy,
+            is_thin=False if vol_params.is_thick else None,
             is_compressed=vol_params.is_compressed)
         src_id = src_snap.get_id()
         try:
@@ -692,6 +709,16 @@ class CommonAdapter(object):
             LOG.debug(
                 'Volume copied via dd because array OE is too old to support '
                 'thin clone api. source snap: %(src_snap)s, lun: %(src_lun)s.',
+                {'src_snap': src_snap.name,
+                 'src_lun': 'Unknown' if src_lun is None else src_lun.name})
+        except storops_ex.UnityThinCloneNotAllowedError:
+            # Thin clone not allowed on some resources,
+            # like thick luns and their snaps
+            lun = self._dd_copy(vol_params, src_snap, src_lun=src_lun)
+            LOG.debug(
+                'Volume copied via dd because source snap/lun is not allowed '
+                'to thin clone, i.e. it is thick. source snap: %(src_snap)s, '
+                'lun: %(src_lun)s.',
                 {'src_snap': src_snap.name,
                  'src_lun': 'Unknown' if src_lun is None else src_lun.name})
         return lun
