@@ -206,6 +206,8 @@ class MockClient(object):
         if (obj.name, name) in (
                 ('snap_61', 'lun_60'), ('lun_63', 'lun_60')):
             return test_client.MockResource(_id=name)
+        elif (obj.name, name) in (('snap_71', 'lun_70'), ('lun_72', 'lun_70')):
+            raise ex.UnityThinCloneNotAllowedError()
         else:
             raise ex.UnityThinCloneLimitExceededError
 
@@ -238,8 +240,7 @@ def mock_adapter(driver_clz):
     ret = driver_clz()
     ret._client = MockClient()
     with mock.patch('cinder.volume.drivers.dell_emc.unity.adapter.'
-                    'CommonAdapter.validate_ports'), \
-            patch_storops():
+                    'CommonAdapter.validate_ports'), patch_storops():
         ret.do_setup(MockDriver(), MockConfig())
     ret.lookup_service = MockLookupService()
     return ret
@@ -318,6 +319,7 @@ def patch_for_concrete_adapter(clz_str):
                     new=get_connection_info)
         def func_wrapper(*args, **kwargs):
             return func(*args, **kwargs)
+
         return func_wrapper
 
     return inner_decorator
@@ -392,7 +394,7 @@ class CommonAdapterTest(unittest.TestCase):
 
     @patch_for_unity_adapter
     def test_create_volume_thick(self):
-        volume = MockOSResource(name='lun_3_thick', size=5, host='unity#pool1',
+        volume = MockOSResource(name='lun_3', size=5, host='unity#pool1',
                                 volume_type_id='thick')
         ret = self.adapter.create_volume(volume)
 
@@ -738,6 +740,20 @@ class CommonAdapterTest(unittest.TestCase):
                                                               'DD_COPY',
                                                               new_dd_lun)
         self.assertEqual(IdMatcher(test_client.MockResource(_id=lun_id)), ret)
+
+    @patch_for_unity_adapter
+    def test_thin_clone_thick(self):
+        lun_id = 'lun_70'
+        src_snap_id = 'snap_71'
+        volume = MockOSResource(name=lun_id, id=lun_id, size=1,
+                                provider_location=get_snap_lun_pl(lun_id))
+        src_snap = test_client.MockResource(name=src_snap_id, _id=src_snap_id)
+        new_dd_lun = test_client.MockResource(name='lun_73')
+        with patch_storops(), patch_dd_copy(new_dd_lun) as dd:
+            vol_params = adapter.VolumeParams(self.adapter, volume)
+            ret = self.adapter._thin_clone(vol_params, src_snap)
+            dd.assert_called_with(vol_params, src_snap, src_lun=None)
+        self.assertEqual(ret, new_dd_lun)
 
     def test_extend_volume_error(self):
         def f():
