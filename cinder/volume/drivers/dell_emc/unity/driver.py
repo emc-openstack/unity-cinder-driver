@@ -70,9 +70,10 @@ class UnityDriver(driver.ManageableVD,
         3.1.5 - Cherry-pick the fix for 1773305 to return the targets which
                 connect to the logged-out initiators
         3.2.0 - Cherry-pick the thick volume support from upstream
+        3.3.0 - Cherry-pick the multi-attach support from upstream
     """
 
-    VERSION = '03.02.00'
+    VERSION = '03.03.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
