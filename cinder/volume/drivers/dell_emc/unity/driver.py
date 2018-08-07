@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -19,6 +19,7 @@ from oslo_config import cfg
 from oslo_log import log as logging
 
 from cinder import interface
+from cinder.volume import configuration
 from cinder.volume import driver
 from cinder.volume.drivers.dell_emc.unity import adapter
 from cinder.volume.drivers.san.san import san_opts
@@ -30,30 +31,47 @@ CONF = cfg.CONF
 
 UNITY_OPTS = [
     cfg.ListOpt('unity_storage_pool_names',
-                default=None,
+                default=[],
                 help='A comma-separated list of storage pool names to be '
                 'used.'),
     cfg.ListOpt('unity_io_ports',
-                default=None,
+                default=[],
                 help='A comma-separated list of iSCSI or FC ports to be used. '
-                     'Each port can be Unix-style glob expressions.')]
+                     'Each port can be Unix-style glob expressions.'),
+    cfg.BoolOpt('remove_empty_host',
+                default=False,
+                help='To remove the host from Unity when the last LUN is '
+                     'detached from it. By default, it is False.')]
 
-CONF.register_opts(UNITY_OPTS)
+CONF.register_opts(UNITY_OPTS, group=configuration.SHARED_CONF_GROUP)
 
 
 @interface.volumedriver
-class UnityDriver(driver.TransferVD,
-                  driver.ManageableVD,
+class UnityDriver(driver.ManageableVD,
                   driver.ManageableSnapshotsVD,
                   driver.BaseVD):
     """Unity Driver.
 
     Version history:
-        00.05.00 - Initial version
-        00.05.01 - Backport thin clone from Pike
+
+    .. code-block:: none
+
+        1.0.0 - Initial version
+        2.0.0 - Add thin clone support
+        3.0.0 - Add IPv6 support
+        3.1.0 - Support revert to snapshot API
+        3.1.1 - Enalbe SSL support
+        3.1.2 - Fixes bug 1759175 to detach the lun correctly when auto zone
+                was enabled and the lun was the last one attached to the host.
+        3.1.3 - Support remove empty host
+        3.1.4 - Fixes bug 1775518 to make sure driver succeed to initialize
+                even though the value of unity_io_ports and
+                unity_storage_pool_names are empty
+        3.1.5 - Cherry-pick the fix for 1773305 to return the targets which
+                connect to the logged-out initiators
     """
 
-    VERSION = '00.05.01'
+    VERSION = '03.01.05'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
@@ -120,7 +138,7 @@ class UnityDriver(driver.TransferVD,
         """Make sure volume is exported."""
         pass
 
-    @zm_utils.AddFCZone
+    @zm_utils.add_fc_zone
     def initialize_connection(self, volume, connector):
         """Initializes the connection and returns connection info.
 
@@ -160,7 +178,7 @@ class UnityDriver(driver.TransferVD,
         """
         return self.adapter.initialize_connection(volume, connector)
 
-    @zm_utils.RemoveFCZone
+    @zm_utils.remove_fc_zone
     def terminate_connection(self, volume, connector, **kwargs):
         """Disallow connection from connector."""
         return self.adapter.terminate_connection(volume, connector)
@@ -207,15 +225,25 @@ class UnityDriver(driver.TransferVD,
         return True
 
     def create_export_snapshot(self, context, snapshot, connector):
-        """Creates the snapshot for backup."""
-        return self.adapter.create_snapshot(snapshot)
+        """Creates the mount point of the snapshot for backup.
+
+        Not necessary to create on Unity.
+        """
+        pass
 
     def remove_export_snapshot(self, context, snapshot):
-        """Deletes the snapshot for backup."""
-        self.adapter.delete_snapshot(snapshot)
+        """Deletes the mount point the snapshot for backup.
+
+        Not necessary to create on Unity.
+        """
+        pass
 
     def initialize_connection_snapshot(self, snapshot, connector, **kwargs):
         return self.adapter.initialize_connection_snapshot(snapshot, connector)
 
     def terminate_connection_snapshot(self, snapshot, connector, **kwargs):
         return self.adapter.terminate_connection_snapshot(snapshot, connector)
+
+    def revert_to_snapshot(self, context, volume, snapshot):
+        """Reverts a volume to a snapshot."""
+        return self.adapter.restore_snapshot(volume, snapshot)

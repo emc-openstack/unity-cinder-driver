@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -96,12 +96,16 @@ class MockAdapter(object):
     def terminate_connection_snapshot(snapshot, connector):
         return {'snapshot': snapshot, 'connector': connector}
 
+    @staticmethod
+    def restore_snapshot(volume, snapshot):
+        return True
 
 ########################
 #
 #   Start of Tests
 #
 ########################
+
 
 class UnityDriverTest(unittest.TestCase):
     @staticmethod
@@ -129,7 +133,8 @@ class UnityDriverTest(unittest.TestCase):
     def test_default_initialize(self):
         config = conf.Configuration(None)
         iscsi_driver = driver.UnityDriver(configuration=config)
-        self.assertIsNone(config.unity_storage_pool_names)
+        self.assertListEqual([], config.unity_storage_pool_names)
+        self.assertListEqual([], config.unity_io_ports)
         self.assertTrue(config.san_thin_provision)
         self.assertEqual('', config.san_ip)
         self.assertEqual('admin', config.san_login)
@@ -245,17 +250,6 @@ class UnityDriverTest(unittest.TestCase):
     def test_backup_use_temp_snapshot(self):
         self.assertTrue(self.driver.backup_use_temp_snapshot())
 
-    def test_create_export_snapshot(self):
-        snapshot = self.driver.create_export_snapshot(self.get_context(),
-                                                      self.get_snapshot(),
-                                                      self.get_connector())
-        self.assertTrue(snapshot.exists)
-
-    def test_remove_export_snapshot(self):
-        snapshot = self.get_snapshot()
-        self.driver.remove_export_snapshot(self.get_context(), snapshot)
-        self.assertFalse(snapshot.exists)
-
     def test_initialize_connection_snapshot(self):
         snapshot = self.get_snapshot()
         conn_info = self.driver.initialize_connection_snapshot(
@@ -267,3 +261,9 @@ class UnityDriverTest(unittest.TestCase):
         conn_info = self.driver.terminate_connection_snapshot(
             snapshot, self.get_connector())
         self.assertEqual(snapshot, conn_info['snapshot'])
+
+    def test_restore_snapshot(self):
+        snapshot = self.get_snapshot()
+        volume = self.get_volume()
+        r = self.driver.revert_to_snapshot(None, volume, snapshot)
+        self.assertTrue(r)

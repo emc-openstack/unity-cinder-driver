@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 - 2018 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -24,6 +24,13 @@ from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import importutils
 
+from cinder import exception
+from cinder.i18n import _
+from cinder import utils as cinder_utils
+from cinder.volume.drivers.dell_emc.unity import client
+from cinder.volume.drivers.dell_emc.unity import utils
+from cinder.volume import utils as vol_utils
+
 storops = importutils.try_import('storops')
 if storops:
     from storops import exception as storops_ex
@@ -31,12 +38,6 @@ else:
     # Set storops_ex to be None for unit test
     storops_ex = None
 
-from cinder import exception
-from cinder.i18n import _, _LE, _LI
-from cinder import utils as cinder_utils
-from cinder.volume.drivers.dell_emc.unity import client
-from cinder.volume.drivers.dell_emc.unity import utils
-from cinder.volume import utils as vol_utils
 
 LOG = logging.getLogger(__name__)
 
@@ -109,10 +110,10 @@ class VolumeParams(object):
         self._io_limit_policy = value
 
     def __eq__(self, other):
-        return (self.volume_id == other.volume_id
-                and self.name == other.name
-                and self.size == other.size
-                and self.io_limit_policy == other.io_limit_policy)
+        return (self.volume_id == other.volume_id and
+                self.name == other.name and
+                self.size == other.size and
+                self.io_limit_policy == other.io_limit_policy)
 
 
 class CommonAdapter(object):
@@ -138,6 +139,8 @@ class CommonAdapter(object):
         self.storage_pools_map = None
         self._client = None
         self.allowed_ports = None
+        self.remove_empty_host = False
+        self.to_lock_host = False
 
     def do_setup(self, driver, conf):
         self.driver = driver
@@ -151,9 +154,8 @@ class CommonAdapter(object):
         self.ip = self.config.san_ip
         self.username = self.config.san_login
         self.password = self.config.san_password
-        # Unity currently not support to upload certificate.
-        # Once it supports, enable the verify.
-        self.array_cert_verify = False
+        # Allow for customized CA
+        self.array_cert_verify = self.config.driver_ssl_cert_verify
         self.array_ca_cert_path = self.config.driver_ssl_cert_path
 
         sys_version = self.client.system.system_version
@@ -165,6 +167,9 @@ class CommonAdapter(object):
         self.storage_pools_map = self.get_managed_pools()
 
         self.allowed_ports = self.validate_ports(self.config.unity_io_ports)
+
+        self.remove_empty_host = self.config.remove_empty_host
+        self.to_lock_host = self.remove_empty_host
 
         group_name = (self.config.config_group if self.config.config_group
                       else 'DEFAULT')
@@ -201,21 +206,21 @@ class CommonAdapter(object):
         matched, _ignored, unmatched_whitelist = utils.match_any(all_ports.id,
                                                                  whitelist)
         if not matched:
-            LOG.error(_LE('No matched ports filtered by all patterns: %s'),
+            LOG.error('No matched ports filtered by all patterns: %s',
                       whitelist)
             raise exception.InvalidConfigurationValue(
                 option='%s.unity_io_ports' % self.config.config_group,
                 value=self.config.unity_io_ports)
 
         if unmatched_whitelist:
-            LOG.error(_LE('No matched ports filtered by below patterns: %s'),
+            LOG.error('No matched ports filtered by below patterns: %s',
                       unmatched_whitelist)
             raise exception.InvalidConfigurationValue(
                 option='%s.unity_io_ports' % self.config.config_group,
                 value=self.config.unity_io_ports)
 
-        LOG.info(_LI('These ports %(matched)s will be used based on '
-                     'the option unity_io_ports: %(config)s'),
+        LOG.info('These ports %(matched)s will be used based on '
+                 'the option unity_io_ports: %(config)s',
                  {'matched': matched,
                   'config': self.config.unity_io_ports})
         return matched
@@ -264,10 +269,16 @@ class CommonAdapter(object):
         :param volume: volume information
         """
         params = VolumeParams(self, volume)
+        log_params = {
+            'name': params.name,
+            'size': params.size,
+            'description': params.description,
+            'pool': params.pool,
+            'io_limit_policy': params.io_limit_policy}
 
-        LOG.info(_LI('Create Volume: %(name)s, size: %(size)s, description: '
-                     '%(description)s, pool: %(pool)s, io limit policy: '
-                     '%(io_limit_policy)s.'), params)
+        LOG.info('Create Volume: %(name)s, size: %(size)s, description: '
+                 '%(description)s, pool: %(pool)s, io limit policy: '
+                 '%(io_limit_policy)s.', log_params)
 
         return self.makeup_model(
             self.client.create_lun(name=params.name,
@@ -279,18 +290,31 @@ class CommonAdapter(object):
     def delete_volume(self, volume):
         lun_id = self.get_lun_id(volume)
         if lun_id is None:
-            LOG.info(_LI('Backend LUN not found, skipping the deletion. '
-                         'Volume: %(volume_name)s.'),
+            LOG.info('Backend LUN not found, skipping the deletion. '
+                     'Volume: %(volume_name)s.',
                      {'volume_name': volume.name})
         else:
             self.client.delete_lun(lun_id)
 
-    @cinder_utils.trace
+    def _create_host_and_attach(self, host_name, lun_or_snap):
+        @utils.lock_if(self.to_lock_host, '{lock_name}')
+        def _lock_helper(lock_name):
+            if not self.to_lock_host:
+                host = self.client.create_host(host_name)
+            else:
+                # Use the lock in the decorator
+                host = self.client.create_host_wo_lock(host_name)
+            hlu = self.client.attach(host, lun_or_snap)
+            return host, hlu
+
+        return _lock_helper('{unity}-{host}'.format(unity=self.client.host,
+                                                    host=host_name))
+
     def _initialize_connection(self, lun_or_snap, connector, vol_id):
-        host = self.client.create_host(connector['host'])
+        host, hlu = self._create_host_and_attach(connector['host'],
+                                                 lun_or_snap)
         self.client.update_host_initiators(
             host, self.get_connector_uids(connector))
-        hlu = self.client.attach(host, lun_or_snap)
         data = self.get_connection_info(hlu, host, connector)
         data['target_discovered'] = True
         if vol_id is not None:
@@ -299,7 +323,6 @@ class CommonAdapter(object):
             'driver_volume_type': self.driver_volume_type,
             'data': data,
         }
-        LOG.debug('Initialized connection info: %s', conn_info)
         return conn_info
 
     @cinder_utils.trace
@@ -307,10 +330,44 @@ class CommonAdapter(object):
         lun = self.client.get_lun(lun_id=self.get_lun_id(volume))
         return self._initialize_connection(lun, connector, volume.id)
 
-    @cinder_utils.trace
+    @staticmethod
+    def filter_targets_by_host(host):
+        # No target info for iSCSI driver
+        return []
+
+    def _detach_and_delete_host(self, host_name, lun_or_snap):
+        @utils.lock_if(self.to_lock_host, '{lock_name}')
+        def _lock_helper(lock_name):
+            # Only get the host from cache here
+            host = self.client.create_host_wo_lock(host_name)
+            self.client.detach(host, lun_or_snap)
+            host.update()  # need update to get the latest `host_luns`
+            targets = self.filter_targets_by_host(host)
+            if self.remove_empty_host and not host.host_luns:
+                self.client.delete_host_wo_lock(host)
+            return targets
+
+        return _lock_helper('{unity}-{host}'.format(unity=self.client.host,
+                                                    host=host_name))
+
+    @staticmethod
+    def get_terminate_connection_info(connector, targets):
+        # No return data from terminate_connection for iSCSI driver
+        return {}
+
     def _terminate_connection(self, lun_or_snap, connector):
-        host = self.client.create_host(connector['host'])
-        self.client.detach(host, lun_or_snap)
+        is_force_detach = connector is None
+        data = {}
+        if is_force_detach:
+            self.client.detach_all(lun_or_snap)
+        else:
+            targets = self._detach_and_delete_host(connector['host'],
+                                                   lun_or_snap)
+            data = self.get_terminate_connection_info(connector, targets)
+        return {
+            'driver_volume_type': self.driver_volume_type,
+            'data': data,
+        }
 
     @cinder_utils.trace
     def terminate_connection(self, volume, connector):
@@ -438,7 +495,9 @@ class CommonAdapter(object):
         .. code-block:: none
 
         existing_ref:{
+
             'source-id':<LUN id in Unity>
+
         }
 
         or
@@ -446,7 +505,9 @@ class CommonAdapter(object):
         .. code-block:: none
 
         existing_ref:{
+
             'source-name':<LUN name in Unity>
+
         }
         """
         lun = self._get_referenced_lun(existing_ref)
@@ -492,13 +553,13 @@ class CommonAdapter(object):
         :param connector: the host connector information.
         :param res_id: the ID of the LUN or snapshot.
 
-        :return the connection information, in a dict with format like (same as
-        the one returned by `_connect_device`):
-        {
+        :return: the connection information, in a dict with format
+         like (same as the one returned by `_connect_device`):
+         {
             'conn': <info returned by `initialize_connection`>,
             'device': <value returned by `connect_volume`>,
             'connector': <host connector info>
-        }
+         }
         """
         init_conn_func = functools.partial(self._initialize_connection,
                                            lun_or_snap, connector, res_id)
@@ -549,8 +610,8 @@ class CommonAdapter(object):
             with excutils.save_and_reraise_exception():
                 utils.ignore_exception(self.client.delete_lun,
                                        dest_lun.get_id())
-                LOG.error(_LE('Failed to create cloned volume: %(vol_id)s, '
-                              'from source unity snapshot: %(snap_name)s.'),
+                LOG.error('Failed to create cloned volume: %(vol_id)s, '
+                          'from source unity snapshot: %(snap_name)s.',
                           {'vol_id': vol_params.volume_id,
                            'snap_name': src_snap.name})
 
@@ -566,8 +627,8 @@ class CommonAdapter(object):
                 io_limit_policy=vol_params.io_limit_policy,
                 new_size_gb=vol_params.size)
         except storops_ex.UnityThinCloneLimitExceededError:
-            LOG.info(_LI('Number of thin clones of base LUN exceeds system '
-                         'limit, dd-copy a new one and thin clone from it.'))
+            LOG.info('Number of thin clones of base LUN exceeds system '
+                     'limit, dd-copy a new one and thin clone from it.')
             # Copy via dd if thin clone meets the system limit
             hidden = copy.copy(vol_params)
             hidden.name = 'hidden-%s' % vol_params.name
@@ -654,6 +715,10 @@ class CommonAdapter(object):
         snap = self.client.get_snap(snapshot.name)
         return self._terminate_connection(snap, connector)
 
+    @cinder_utils.trace
+    def restore_snapshot(self, volume, snapshot):
+        return self.client.restore_snapshot(snapshot.name)
+
 
 class ISCSIAdapter(CommonAdapter):
     protocol = PROTOCOL_ISCSI
@@ -727,25 +792,19 @@ class FCAdapter(CommonAdapter):
         data['target_lun'] = hlu
         return data
 
-    @cinder_utils.trace
-    def _terminate_connection(self, lun_or_snap, connector):
+    def filter_targets_by_host(self, host):
+        if self.auto_zone_enabled and not host.host_luns:
+            return self.client.get_fc_target_info(
+                host=host, logged_in_only=False,
+                allowed_ports=self.allowed_ports)
+        return []
+
+    def get_terminate_connection_info(self, connector, targets):
         # For FC, terminate_connection needs to return data to zone manager
         # which would clean the zone based on the data.
-        super(FCAdapter, self)._terminate_connection(lun_or_snap, connector)
-
-        ret = None
-        if self.auto_zone_enabled:
-            ret = {
-                'driver_volume_type': self.driver_volume_type,
-                'data': {}
-            }
-            host = self.client.create_host(connector['host'])
-            if len(host.host_luns) == 0:
-                targets = self.client.get_fc_target_info(
-                    logged_in_only=True, allowed_ports=self.allowed_ports)
-                ret['data'] = self._get_fc_zone_info(connector['wwpns'],
-                                                     targets)
-        return ret
+        if targets:
+            return self._get_fc_zone_info(connector['wwpns'], targets)
+        return {}
 
     def _get_fc_zone_info(self, initiator_wwns, target_wwns):
         mapping = self.lookup_service.get_device_mapping_from_network(

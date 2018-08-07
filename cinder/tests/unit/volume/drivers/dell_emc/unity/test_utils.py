@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -168,6 +168,10 @@ class UnityUtilsTest(unittest.TestCase):
 
     def test_convert_ip_to_portal(self):
         self.assertEqual('1.2.3.4:3260', utils.convert_ip_to_portal('1.2.3.4'))
+        self.assertEqual('[fd27:2e95:e174::100]:3260',
+                         utils.convert_ip_to_portal('fd27:2e95:e174::100'))
+        self.assertEqual('[fd27:2e95:e174::100]:3260',
+                         utils.convert_ip_to_portal('[fd27:2e95:e174::100]'))
 
     def test_convert_to_itor_tgt_map(self):
         zone_mapping = {
@@ -253,4 +257,25 @@ class UnityUtilsTest(unittest.TestCase):
         volume = test_adapter.MockOSResource(volume_type_id='max_2_mbps')
         ret = utils.get_backend_qos_specs(volume)
         expected = {'maxBWS': 2, 'id': 'max_2_mbps', 'maxIOPS': None}
+        self.assertEqual(expected, ret)
+
+    def test_remove_empty(self):
+        option = mock.Mock()
+        value_list = [' pool1', 'pool2 ', '     pool3  ']
+        ret = utils.remove_empty(option, value_list)
+        expected = ['pool1', 'pool2', 'pool3']
+        self.assertListEqual(expected, ret)
+
+    def test_remove_empty_none(self):
+        option = mock.Mock()
+        value_list = None
+        ret = utils.remove_empty(option, value_list)
+        expected = None
+        self.assertEqual(expected, ret)
+
+    def test_remove_empty_empty_list(self):
+        option = mock.Mock()
+        value_list = []
+        ret = utils.remove_empty(option, value_list)
+        expected = None
         self.assertEqual(expected, ret)
