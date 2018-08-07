@@ -3,9 +3,13 @@ Dell EMC Unity Cinder driver
 
 ## IMPORTANT NOTE:
 
-**Please follow the [Driver configuration](#driver-configuration)
+1. **Please follow the [Driver configuration](#driver-configuration)
 exactly if you are upgrading Unity Cinder driver from version 0.4.1
 (and before), or newly installing Unity Cinder driver.**
+
+2. **For who is using Queens(or later) downstream, stop reading this doc
+and go to 
+[official doc downstream version](./doc/source/configuration/block-storage/drivers/dell-emc-unity-driver.rst).**
 
 Version mapping
 ---------------
@@ -29,16 +33,16 @@ distributed Python package
 Version
 -------
 
-0.5.0
+3.3.0
 
 Prerequisites
 -------------
 
-| Software  | Version         |
-|-----------|-----------------|
-| Unity OE  | 4.1.X or newer  |
-| OpenStack | Newton          |
-| storops   | 0.5.5 or newer  |
+| Software  | Version          |
+|-----------|------------------|
+| Unity OE  | 4.1.X or newer   |
+| OpenStack | Queens           |
+| storops   | 0.5.10 or newer  |
 
 Supported operations
 --------------------
@@ -52,6 +56,8 @@ Supported operations
 -   Migrate a volume.
 -   Get volume statistics.
 -   Efficient non-disruptive volume backup.
+-   Thick volume support.
+-   Multi-attach support.
 
 Driver configuration
 --------------------
