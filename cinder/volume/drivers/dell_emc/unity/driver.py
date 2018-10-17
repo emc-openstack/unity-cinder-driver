@@ -36,7 +36,13 @@ UNITY_OPTS = [
     cfg.ListOpt('unity_io_ports',
                 default=None,
                 help='A comma-separated list of iSCSI or FC ports to be used. '
-                     'Each port can be Unix-style glob expressions.')]
+                     'Each port can be Unix-style glob expressions.'),
+    cfg.BoolOpt('force_delete_attached_snapshots',
+                default=False,
+                help='To force delete the snapshot from Unity even when it is '
+                     'attached to hosts. Be careful to set it to True. If the '
+                     'snapshot is attached, force deleting it could cause data'
+                     'unaccessble and/or data loss. By default, it is False.')]
 
 CONF.register_opts(UNITY_OPTS)
 
@@ -52,9 +58,11 @@ class UnityDriver(driver.TransferVD,
         00.05.00 - Initial version
         00.05.01 - Backport thin clone from Pike
         00.05.02 - Fixed bug 170311: temp snapshot for backup was deleted twice
+        00.05.03 - Fixed bug 1798529: add option for force deleting attached
+                   snapshots
     """
 
-    VERSION = '00.05.02'
+    VERSION = '00.05.03'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"

@@ -138,6 +138,7 @@ class CommonAdapter(object):
         self.storage_pools_map = None
         self._client = None
         self.allowed_ports = None
+        self.force_delete_attached_snapshots = False
 
     def do_setup(self, driver, conf):
         self.driver = driver
@@ -165,6 +166,9 @@ class CommonAdapter(object):
         self.storage_pools_map = self.get_managed_pools()
 
         self.allowed_ports = self.validate_ports(self.config.unity_io_ports)
+
+        self.force_delete_attached_snapshots = (
+            self.config.force_delete_attached_snapshots)
 
         group_name = (self.config.config_group if self.config.config_group
                       else 'DEFAULT')
@@ -408,7 +412,8 @@ class CommonAdapter(object):
         :param snapshot: the snapshot to delete.
         """
         snap = self.client.get_snap(name=snapshot.name)
-        self.client.delete_snap(snap)
+        self.client.delete_snap(
+            snap, even_attached=self.force_delete_attached_snapshots)
 
     def _get_referenced_lun(self, existing_ref):
         if 'source-id' in existing_ref:

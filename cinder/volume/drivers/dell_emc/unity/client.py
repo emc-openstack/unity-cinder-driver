@@ -160,13 +160,13 @@ class UnityClient(object):
         return snap
 
     @staticmethod
-    def delete_snap(snap):
+    def delete_snap(snap, even_attached=False):
         if snap is None:
             LOG.debug("Snap to delete is None, skipping deletion.")
             return
 
         try:
-            snap.delete()
+            snap.delete(even_attached=even_attached)
         except storops_ex.UnityResourceNotFoundError as err:
             LOG.debug("Snap %(snap_name)s may be deleted already. "
                       "Message: %(err)s",
