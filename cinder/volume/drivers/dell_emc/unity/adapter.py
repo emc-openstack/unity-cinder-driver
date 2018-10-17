@@ -591,7 +591,7 @@ class CommonAdapter(object):
         :param snapshot: the snapshot to delete.
         """
         snap = self.client.get_snap(name=snapshot.name)
-        self.client.delete_snap(snap)
+        self.client.delete_snap(snap, even_attached=True)
 
     def _get_referenced_lun(self, existing_ref):
         if 'source-id' in existing_ref:

@@ -134,7 +134,7 @@ class MockClient(object):
         return ret
 
     @staticmethod
-    def delete_snap(snap):
+    def delete_snap(snap, even_attached=False):
         if snap.name in ('abc-def_snap',):
             raise ex.SnapDeleteIsCalled()
 
