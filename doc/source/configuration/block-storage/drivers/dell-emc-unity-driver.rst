@@ -15,7 +15,7 @@ Prerequisites
 +===================+=================+
 | Unity OE          | 4.1.X or newer  |
 +-------------------+-----------------+
-| storops           | 0.5.10 or newer |
+| storops           | 1.1.0 or newer  |
 +-------------------+-----------------+
 
 
@@ -248,7 +248,7 @@ following commands to create a thick volume.
 
 
 Compressed volume support
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Unity driver supports ``compressed volume`` creation, modification and
 deletion. In order to create a compressed volume, a volume type which
@@ -264,6 +264,23 @@ Then create volume and specify the new created volume type.
 .. note:: In Unity, only All-Flash pools support compressed volume, for the
           other type of pools, "'compression_support': False" will be
           returned when getting pool stats.
+
+
+Storage-assisted volume migration support
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Unity driver supports storage-assisted volume migration, when the user starts
+migrating with ``cinder migrate --force-host-copy False <volume_id> <host>`` or
+``cinder migrate <volume_id> <host>``, cinder will try to leverage the Unity's
+native volume migration functionality. If Unity fails to migrate the volume,
+host-assisted migration will be triggered.
+
+In the following scenarios, Unity storage-assisted volume migration will not be
+triggered. Instead, host-assisted volume migration will be triggered:
+
+- Volume is to be migrated across backends.
+- Migration of cloned volume. For example, if vol_2 was cloned from vol_1,
+  the storage-assisted volume migration of vol_2 will not be triggered.
 
 
 QoS support
