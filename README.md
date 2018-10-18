@@ -29,16 +29,16 @@ distributed Python package
 Version
 -------
 
-0.5.0
+0.5.3
 
 Prerequisites
 -------------
 
-| Software  | Version         |
-|-----------|-----------------|
-| Unity OE  | 4.1.X or newer  |
-| OpenStack | Newton          |
-| storops   | 0.5.5 or newer  |
+| Software  | Version          |
+|-----------|------------------|
+| Unity OE  | 4.1.X or newer   |
+| OpenStack | Newton           |
+| storops   | 0.5.12 or newer  |
 
 Supported operations
 --------------------
@@ -224,6 +224,17 @@ $ uemcli /net/port/fc show -output csv
 "spb_iom_0_fc0","SP B I/O Module 0 FC Port 0","spb", ...
 ...
 ```
+
+### Force delete attached snapshots option
+
+Set the option to ``True`` to force delete the snapshot even if it is attached
+to hosts. Enable it carefully, force deleting an attached snapshot could cause
+data unaccessble and/or data loss.
+
+``` sourcecode
+   force_delete_attached_snapshots = True
+```
+
 
 Live migration integration
 --------------------------
