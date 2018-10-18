@@ -97,6 +97,11 @@ class MockAdapter(object):
         return {'snapshot': snapshot, 'connector': connector}
 
 
+    @staticmethod
+    def migrate_volume(volume, host):
+        return True, {}
+
+
 ########################
 #
 #   Start of Tests
@@ -179,6 +184,13 @@ class UnityDriverTest(unittest.TestCase):
         volume = self.get_volume()
         self.driver.delete_volume(volume)
         self.assertFalse(volume.exists)
+
+    def test_migrate_volume(self):
+        volume = self.get_volume()
+        ret = self.driver.migrate_volume(self.get_context(),
+                                         volume,
+                                         'HostA@BackendB#PoolC')
+        self.assertEqual((True, {}), ret)
 
     def test_create_snapshot(self):
         snapshot = self.get_snapshot()
