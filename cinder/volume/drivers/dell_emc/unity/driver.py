@@ -85,9 +85,11 @@ class UnityDriver(driver.ManageableVD,
                 downstream train)
         4.5.0 - Support compressed volume (cherry pick from upstream rocky)
         4.6.0 - Support thick volume (cherry pick from upstream rocky)
+        4.7.0 - Support storage assisted volume migration (cherry pick from
+                upstream stein)
     """
 
-    VERSION = '04.06.00'
+    VERSION = '04.07.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
@@ -129,6 +131,10 @@ class UnityDriver(driver.ManageableVD,
     def delete_volume(self, volume):
         """Deletes a volume."""
         self.adapter.delete_volume(volume)
+
+    def migrate_volume(self, context, volume, host):
+        """Migrates a volume."""
+        return self.adapter.migrate_volume(volume, host)
 
     def create_snapshot(self, snapshot):
         """Creates a snapshot."""

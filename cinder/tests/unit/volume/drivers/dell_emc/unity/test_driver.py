@@ -104,6 +104,10 @@ class MockAdapter(object):
         return True
 
     @staticmethod
+    def migrate_volume(volume, host):
+        return True, {}
+
+    @staticmethod
     def create_group(group):
         return group
 
@@ -240,6 +244,13 @@ class UnityDriverTest(unittest.TestCase):
         volume = self.get_volume()
         self.driver.delete_volume(volume)
         self.assertFalse(volume.exists)
+
+    def test_migrate_volume(self):
+        volume = self.get_volume()
+        ret = self.driver.migrate_volume(self.get_context(),
+                                         volume,
+                                         'HostA@BackendB#PoolC')
+        self.assertEqual((True, {}), ret)
 
     def test_create_snapshot(self):
         snapshot = self.get_snapshot()
