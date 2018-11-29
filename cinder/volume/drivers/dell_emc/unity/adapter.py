@@ -20,12 +20,13 @@ import random
 from oslo_log import log as logging
 from oslo_utils import excutils
 
+from cinder import coordination
 from cinder import exception
 from cinder import utils as cinder_utils
 from cinder.i18n import _, _LE, _LI
+from cinder.volume import utils as vol_utils
 from cinder.volume.drivers.dell_emc.unity import client
 from cinder.volume.drivers.dell_emc.unity import utils
-from cinder.volume import utils as vol_utils
 
 LOG = logging.getLogger(__name__)
 
@@ -83,6 +84,7 @@ class CommonAdapter(object):
         self.storage_pools_map = self.get_managed_pools()
 
         self.allowed_ports = self.validate_ports(self.config.unity_io_ports)
+        coordination.COORDINATOR.start()
 
     def normalize_config(self, config):
         config.unity_storage_pool_names = utils.remove_empty(
