@@ -22,7 +22,7 @@ distributed Python package
 Version
 -------
 
-0.4.3
+0.4.5
 
 Prerequisites
 -------------
