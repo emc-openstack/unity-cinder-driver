@@ -7,6 +7,13 @@ Dell EMC Unity Cinder driver
 exactly if you are upgrading Unity Cinder driver from version 0.4.1
 (and before), or newly installing Unity Cinder driver.**
 
+Version mapping
+---------------
+|       | Liberty | Mitaka | Newton | Ocata | Pike   | Queens |
+|-------|---------|--------|--------|-------|--------|--------|
+| Unity | 0.3.x   | 0.4.x  | 0.5.x  | 1.x.x | 2.x.x  | 3.x.x  |
+| VNX   | 6.x.x   | 7.x.x  | 8.x.x  | 9.x.x | 10.x.x | 11.x.x |
+
 License
 -------
 
@@ -22,7 +29,7 @@ distributed Python package
 Version
 -------
 
-0.4.6
+0.4.7
 
 Prerequisites
 -------------
@@ -31,7 +38,7 @@ Prerequisites
 |-----------|-----------------|
 | Unity OE  | 4.1.X or newer  |
 | OpenStack | Mitaka          |
-| storops   | 0.5.10 or newer |
+| storops   | 0.5.11 or newer |
 
 Supported operations
 --------------------
