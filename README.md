@@ -29,16 +29,16 @@ distributed Python package
 Version
 -------
 
-0.5.0
+2.5.0
 
 Prerequisites
 -------------
 
-| Software  | Version         |
-|-----------|-----------------|
-| Unity OE  | 4.1.X or newer  |
-| OpenStack | Newton          |
-| storops   | 0.5.5 or newer  |
+| Software  | Version          |
+|-----------|------------------|
+| Unity OE  | 4.1.X or newer   |
+| OpenStack | Pike             |
+| storops   | 0.5.12 or newer  |
 
 Supported operations
 --------------------
