@@ -60,9 +60,10 @@ class UnityDriver(driver.TransferVD,
         00.05.02 - Fixed bug 170311: temp snapshot for backup was deleted twice
         00.05.03 - Fixed bug 1798529: add option for force deleting attached
                    snapshots
+        00.05.04 - Fixed bug which create volume related logs failed to print
     """
 
-    VERSION = '00.05.03'
+    VERSION = '00.05.04'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
