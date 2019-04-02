@@ -74,8 +74,12 @@ class MockClient(object):
         return test_client.MockResourceList(['pool0', 'pool1'])
 
     @staticmethod
-    def create_lun(name, size, pool, description=None, io_limit_policy=None):
-        return test_client.MockResource(_id='lun_3')
+    def create_lun(name, size, pool, description=None, io_limit_policy=None,
+                   is_thin=None):
+        lun_id = name
+        if is_thin is not None and not is_thin:
+            lun_id += '_thick'
+        return test_client.MockResource(_id=lun_id)
 
     @staticmethod
     def get_lun(name=None, lun_id=None):
@@ -225,8 +229,17 @@ def get_connection_info(adapter, hlu, host, connector):
     return {}
 
 
+def get_volume_type_extra_specs(type_id):
+    if type_id == 'thick':
+        return {'provisioning:type': 'thick',
+                'thick_provisioning_support': '<is> True'}
+    return {}
+
+
 def patch_for_unity_adapter(func):
     @functools.wraps(func)
+    @mock.patch('cinder.volume.volume_types.get_volume_type_extra_specs',
+                new=get_volume_type_extra_specs)
     @mock.patch('cinder.volume.drivers.dell_emc.unity.utils.'
                 'get_backend_qos_specs',
                 new=get_backend_qos_specs)
@@ -283,6 +296,15 @@ class CommonAdapterTest(unittest.TestCase):
         expected = get_lun_pl('lun_3')
         self.assertEqual(expected, ret['provider_location'])
 
+    @patch_for_unity_adapter
+    def test_create_volume_thick(self):
+        volume = mock.Mock(name='lun_3', size=5, host='unity#pool1',
+                           volume_type_id='thick')
+        ret = self.adapter.create_volume(volume)
+
+        expected = get_lun_pl('lun_3_thick')
+        self.assertEqual(expected, ret['provider_location'])
+
     def test_create_snapshot(self):
         volume = mock.Mock(provider_location='id^lun_43')
         snap = mock.Mock(volume=volume)
@@ -324,7 +346,7 @@ class CommonAdapterTest(unittest.TestCase):
         self.assertEqual(2, stats['free_capacity_gb'])
         self.assertEqual(300, stats['max_over_subscription_ratio'])
         self.assertEqual(5, stats['reserved_percentage'])
-        self.assertFalse(stats['thick_provisioning_support'])
+        self.assertTrue(stats['thick_provisioning_support'])
         self.assertTrue(stats['thin_provisioning_support'])
 
     def test_update_volume_stats(self):
@@ -332,7 +354,7 @@ class CommonAdapterTest(unittest.TestCase):
         self.assertEqual('backend', stats['volume_backend_name'])
         self.assertEqual('unknown', stats['storage_protocol'])
         self.assertTrue(stats['thin_provisioning_support'])
-        self.assertFalse(stats['thick_provisioning_support'])
+        self.assertTrue(stats['thick_provisioning_support'])
         self.assertEqual(1, len(stats['pools']))
 
     def test_serial_number(self):

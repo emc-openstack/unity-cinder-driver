@@ -22,16 +22,16 @@ distributed Python package
 Version
 -------
 
-0.4.5
+0.4.6
 
 Prerequisites
 -------------
 
-| Software  | Version        |
-|-----------|----------------|
-| Unity OE  | 4.1.X or newer |
-| OpenStack | Mitaka         |
-| storops   | 0.5.5 or newer |
+| Software  | Version         |
+|-----------|-----------------|
+| Unity OE  | 4.1.X or newer  |
+| OpenStack | Mitaka          |
+| storops   | 0.5.10 or newer |
 
 Supported operations
 --------------------
@@ -45,6 +45,7 @@ Supported operations
 -   Migrate a volume.
 -   Get volume statistics.
 -   Efficient non-disruptive volume backup.
+-   Create thick volumes.
 
 Driver configuration
 --------------------
@@ -261,7 +262,14 @@ To enable multipath in live migration:
 Thin and thick provisioning
 ---------------------------
 
-Only thin volume provisioning is supported in Unity volume driver.
+By default, the volume created by Unity driver is thin provisioned. Run the
+following commands to create a thick volume.
+
+```bash
+# openstack volume type create --property provisioning:type=thick \
+    --property thick_provisioning_support='<is> True' thick_volume_type
+# openstack volume create --type thick_volume_type thick_volume
+```
 
 QoS support
 -----------

@@ -176,16 +176,21 @@ class CommonAdapter(object):
         qos_specs = utils.get_backend_qos_specs(volume)
         limit_policy = self.client.get_io_limit_policy(qos_specs)
 
+        provision = utils.get_extra_spec(volume, 'provisioning:type')
+        support = utils.get_extra_spec(volume, 'thick_provisioning_support')
+        is_thick = (provision == 'thick' and support == '<is> True')
+
         LOG.info(_LI('Create Volume: %(volume)s  Size: %(size)s '
-                     'Pool: %(pool)s Qos: %(qos)s.'),
+                     'Pool: %(pool)s Qos: %(qos)s Thick: %(is_thick)s.'),
                  {'volume': volume_name,
                   'size': volume_size,
                   'pool': pool.name,
-                  'qos': qos_specs})
+                  'qos': qos_specs,
+                  'is_thick': is_thick})
 
         lun = self.client.create_lun(
             volume_name, volume_size, pool, description=volume_description,
-            io_limit_policy=limit_policy)
+            io_limit_policy=limit_policy, is_thin=False if is_thick else None)
         location = self._build_provider_location(
             lun_type='lun',
             lun_id=lun.get_id())
@@ -263,7 +268,7 @@ class CommonAdapter(object):
             'volume_backend_name': self.volume_backend_name,
             'storage_protocol': self.protocol,
             'thin_provisioning_support': True,
-            'thick_provisioning_support': False,
+            'thick_provisioning_support': True,
             'pools': self.get_pools_stats(),
         }
 
@@ -287,7 +292,7 @@ class CommonAdapter(object):
                               {'pool_name': pool.name,
                                'array_serial': self.serial_number}),
             'thin_provisioning_support': True,
-            'thick_provisioning_support': False,
+            'thick_provisioning_support': True,
             'max_over_subscription_ratio': (
                 self.max_over_subscription_ratio)}
 
