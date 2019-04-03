@@ -45,7 +45,7 @@ Supported operations
 -   Migrate a volume.
 -   Get volume statistics.
 -   Efficient non-disruptive volume backup.
--   Create thick volumes.
+-   Thick volumes support.
 
 Driver configuration
 --------------------
