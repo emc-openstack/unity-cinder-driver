@@ -279,6 +279,55 @@ class UnityUtilsTest(unittest.TestCase):
 
         self.assertEqual(9, data[0])
 
+    def test_get_values_from_qos_specs_none(self):
+        qos_specs = {}
+        ret = utils.get_values_from_qos_specs(qos_specs)
+        self.assertIsNone(ret)
+
+    def test_get_values_from_qos_specs_iops_old_keys(self):
+        type_id = 'max_1000_iops'
+        qos_specs = get_volume_type_qos_specs(type_id).get('qos_specs')
+        ret = utils.get_values_from_qos_specs(qos_specs)
+        expected = {'qos_bws': None, 'id': 'max_1000_iops', 'qos_iops': 1000}
+        self.assertEqual(expected, ret)
+
+    def test_get_values_from_qos_specs_iops_new_keys(self):
+        type_id = 'max_1001_iops'
+        qos_specs = get_volume_type_qos_specs(type_id).get('qos_specs')
+        ret = utils.get_values_from_qos_specs(qos_specs)
+        expected = {'qos_bws': None, 'id': 'max_1001_iops', 'qos_iops': 1001}
+        self.assertEqual(expected, ret)
+
+    def test_get_values_from_qos_specs_bws_old_keys(self):
+        type_id = 'max_2_kbps'
+        qos_specs = get_volume_type_qos_specs(type_id).get('qos_specs')
+        ret = utils.get_values_from_qos_specs(qos_specs)
+        expected = {'qos_bws': 2, 'id': 'max_2_kbps', 'qos_iops': None}
+        self.assertEqual(expected, ret)
+
+    def test_get_values_from_qos_specs_bws_new_keys(self):
+        type_id = 'max_3_kbps'
+        qos_specs = get_volume_type_qos_specs(type_id).get('qos_specs')
+        ret = utils.get_values_from_qos_specs(qos_specs)
+        expected = {'qos_bws': 3, 'id': 'max_3_kbps', 'qos_iops': None}
+        self.assertEqual(expected, ret)
+
+    def test_get_values_from_qos_specs_bws_new_keys_frac(self):
+        type_id = 'qos_bps_frac'
+        qos_specs = get_volume_type_qos_specs(type_id).get('qos_specs')
+        ret = utils.get_values_from_qos_specs(qos_specs)
+        expected = {'qos_bws': 1000976,
+                    'id': 'qos_bps_frac',
+                    'qos_iops': None}
+        self.assertEqual(expected, ret)
+
+    def test_get_values_from_qos_specs_mix_keys(self):
+        type_id = 'qos_mix_keys'
+        qos_specs = get_volume_type_qos_specs(type_id).get('qos_specs')
+        ret = utils.get_values_from_qos_specs(qos_specs)
+        expected = {'qos_bws': 1001, 'id': 'qos_mix_keys', 'qos_iops': 1001}
+        self.assertEqual(expected, ret)
+
     def test_get_backend_qos_specs_type_none(self):
         volume = test_adapter.MockOSResource(volume_type_id=None)
         ret = utils.get_backend_qos_specs(volume)
@@ -302,48 +351,6 @@ class UnityUtilsTest(unittest.TestCase):
         volume = test_adapter.MockOSResource(volume_type_id='both_none')
         ret = utils.get_backend_qos_specs(volume)
         self.assertIsNone(ret)
-
-    @patch_volume_types
-    def test_get_backend_qos_iops_old_keys(self):
-        volume = test_adapter.MockOSResource(volume_type_id='max_1000_iops')
-        ret = utils.get_backend_qos_specs(volume)
-        expected = {'qos_bws': None, 'id': 'max_1000_iops', 'qos_iops': 1000}
-        self.assertEqual(expected, ret)
-
-    @patch_volume_types
-    def test_get_backend_qos_iops_new_keys(self):
-        volume = test_adapter.MockOSResource(volume_type_id='max_1001_iops')
-        ret = utils.get_backend_qos_specs(volume)
-        expected = {'qos_bws': None, 'id': 'max_1001_iops', 'qos_iops': 1001}
-        self.assertEqual(expected, ret)
-
-    @patch_volume_types
-    def test_get_backend_qos_bps_old_keys(self):
-        volume = test_adapter.MockOSResource(volume_type_id='max_2_kbps')
-        ret = utils.get_backend_qos_specs(volume)
-        expected = {'qos_bws': 2, 'id': 'max_2_kbps', 'qos_iops': None}
-        self.assertEqual(expected, ret)
-
-    @patch_volume_types
-    def test_get_backend_qos_bps_new_keys(self):
-        volume = test_adapter.MockOSResource(volume_type_id='max_3_kbps')
-        ret = utils.get_backend_qos_specs(volume)
-        expected = {'qos_bws': 3, 'id': 'max_3_kbps', 'qos_iops': None}
-        self.assertEqual(expected, ret)
-
-    @patch_volume_types
-    def test_get_backend_qos_bps_new_keys_frac(self):
-        volume = test_adapter.MockOSResource(volume_type_id='qos_bps_frac')
-        ret = utils.get_backend_qos_specs(volume)
-        expected = {'qos_bws': 1000976, 'id': 'qos_bps_frac', 'qos_iops': None}
-        self.assertEqual(expected, ret)
-
-    @patch_volume_types
-    def test_get_backend_qos_mix_keys(self):
-        volume = test_adapter.MockOSResource(volume_type_id='qos_mix_keys')
-        ret = utils.get_backend_qos_specs(volume)
-        expected = {'qos_bws': 1001, 'id': 'qos_mix_keys', 'qos_iops': 1001}
-        self.assertEqual(expected, ret)
 
     def test_remove_empty(self):
         option = mock.Mock()
