@@ -605,7 +605,7 @@ class ClientTest(unittest.TestCase):
         self.assertIsNone(ret)
 
     def test_get_io_limit_policy_create_new(self):
-        specs = {'maxBWS': 2, 'id': 'max_2_mbps', 'maxIOPS': None}
+        specs = {'qos_bws': 2, 'id': 'max_2_mbps', 'qos_iops': None}
         limit = self.client.get_io_limit_policy(specs)
         self.assertEqual('max_2_mbps', limit.name)
         self.assertEqual(2, limit.max_kbps)
