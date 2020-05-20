@@ -111,6 +111,13 @@ class UnityClient(object):
         def _delete_lun_if_exist(force_snap_delete=False):
             """Deletes LUN, skip if it doesn't exist."""
             try:
+                if hasattr(lun, 'host_access') and lun.host_access:
+                    LOG.info("LUN %(id)s has hosts accessed, hosts: "
+                             "%(hosts)s, remove these accesses anyway.",
+                             {'id': lun_id,
+                              'hosts': [host_access.host.name for host_access
+                                        in lun.host_access]})
+                    lun.modify(host_access=[])
                 lun.delete(force_snap_delete=force_snap_delete)
             except storops_ex.UnityResourceNotFoundError:
                 LOG.debug("LUN %s doesn't exist. Deletion is not needed.",
