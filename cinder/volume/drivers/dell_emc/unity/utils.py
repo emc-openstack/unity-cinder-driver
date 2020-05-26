@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -18,15 +18,19 @@ from __future__ import division
 import contextlib
 from distutils import version
 import functools
+import json
+
 from oslo_log import log as logging
 from oslo_utils import fnmatch
 from oslo_utils import units
 import six
 
+from cinder import coordination
 from cinder import exception
-from cinder.i18n import _, _LW
-from cinder.volume import utils as vol_utils
+from cinder.i18n import _
+from cinder.objects import fields
 from cinder.volume import volume_types
+from cinder.volume import volume_utils
 from cinder.zonemanager import utils as zm_utils
 
 LOG = logging.getLogger(__name__)
@@ -70,11 +74,11 @@ def extract_provider_location(provider_location, key):
             if len(fields) == 2 and fields[0] == key:
                 return fields[1]
         else:
-            LOG.warning(_LW('"%(key)s" is not found in provider '
-                            'location "%(location)s."'),
+            LOG.warning('"%(key)s" is not found in provider '
+                        'location "%(location)s."',
                         {'key': key, 'location': provider_location})
     else:
-        LOG.warning(_LW('Empty provider location received.'))
+        LOG.warning('Empty provider location received.')
 
 
 def byte_to_gib(byte):
@@ -136,6 +140,9 @@ def extract_fc_uids(connector):
 
 
 def convert_ip_to_portal(ip):
+    is_ipv6_without_brackets = ':' in ip and ip[-1] != ']'
+    if is_ipv6_without_brackets:
+        return '[%s]:3260' % ip
     return '%s:3260' % ip
 
 
@@ -144,13 +151,16 @@ def convert_to_itor_tgt_map(zone_mapping):
 
     :param zone_mapping: mapping is the data from the zone lookup service
          with below format
+
         {
              <San name>: {
                  'initiator_port_wwn_list':
                  ('200000051e55a100', '200000051e55a121'..)
                  'target_port_wwn_list':
                  ('100000051e55a100', '100000051e55a121'..)
+
              }
+
         }
     """
     target_wwns = []
@@ -169,7 +179,19 @@ def convert_to_itor_tgt_map(zone_mapping):
 
 
 def get_pool_name(volume):
-    return vol_utils.extract_host(volume.host, 'pool')
+    return volume_utils.extract_host(volume.host, 'pool')
+
+
+def get_pool_name_from_host(host):
+    return volume_utils.extract_host(host['host'], 'pool')
+
+
+def get_backend_name_from_volume(volume):
+    return volume_utils.extract_host(volume.host, 'backend')
+
+
+def get_backend_name_from_host(host):
+    return volume_utils.extract_host(host['host'], 'backend')
 
 
 def get_extra_spec(volume, spec_key):
@@ -186,9 +208,9 @@ def ignore_exception(func, *args, **kwargs):
     try:
         func(*args, **kwargs)
     except Exception as ex:
-        LOG.warning(_LW('Error occurred but ignored. Function: %(func_name)s, '
-                        'args: %(args)s, kwargs: %(kwargs)s, '
-                        'exception: %(ex)s.'),
+        LOG.warning('Error occurred but ignored. Function: %(func_name)s, '
+                    'args: %(args)s, kwargs: %(kwargs)s, '
+                    'exception: %(ex)s.',
                     {'func_name': func, 'args': args,
                      'kwargs': kwargs, 'ex': ex})
 
@@ -266,12 +288,13 @@ def get_backend_qos_specs(volume):
 
 
 def remove_empty(option, value_list):
-    if value_list is not None:
+    if value_list:
         value_list = list(filter(None, map(str.strip, value_list)))
         if not value_list:
             raise exception.InvalidConfigurationValue(option=option,
                                                       value=value_list)
-    return value_list
+        return value_list
+    return None
 
 
 def match_any(full, patterns):
@@ -289,3 +312,83 @@ def match_any(full, patterns):
 
 def is_before_4_1(ver):
     return version.LooseVersion(ver) < version.LooseVersion('4.1')
+
+
+def lock_if(condition, lock_name):
+    if condition:
+        return coordination.synchronized(lock_name)
+    else:
+        return functools.partial
+
+
+def append_capabilities(func):
+    capabilities = {
+        'thin_provisioning_support': True,
+        'thick_provisioning_support': True,
+        'consistent_group_snapshot_enabled': True
+    }
+
+    @six.wraps(func)
+    def _inner(*args, **kwargs):
+        output = func(*args, **kwargs)
+        output.update(capabilities)
+        return output
+
+    return _inner
+
+
+def is_multiattach_to_host(volume_attachment, host_name):
+    # When multiattach is enabled, a volume could be attached to two or more
+    # instances which are hosted on one nova host.
+    # Because unity cannot recognize the volume is attached to two or more
+    # instances, we should keep the volume attached to the nova host until
+    # the volume is detached from the last instance.
+    if not volume_attachment:
+        return False
+
+    attachment = [a for a in volume_attachment
+                  if a.attach_status == fields.VolumeAttachStatus.ATTACHED and
+                  a.attached_host == host_name]
+    return len(attachment) > 1
+
+
+def load_replication_data(rep_data_str):
+    # rep_data_str is string dumped from a dict like:
+    # {
+    #     'default': 'rep_session_name_failed_over',
+    #     'backend_id_1': 'rep_session_name_1',
+    #     'backend_id_2': 'rep_session_name_2'
+    # }
+    return json.loads(rep_data_str)
+
+
+def dump_replication_data(model_update, rep_data):
+    # rep_data is a dict like:
+    # {
+    #     'backend_id_1': 'rep_session_name_1',
+    #     'backend_id_2': 'rep_session_name_2'
+    # }
+    model_update['replication_driver_data'] = json.dumps(rep_data)
+    return model_update
+
+
+def enable_replication_status(model_update, rep_data):
+    model_update['replication_status'] = fields.ReplicationStatus.ENABLED
+    return dump_replication_data(model_update, rep_data)
+
+
+def error_replication_status(model_update):
+    # model_update is a dict like:
+    # {
+    #     'volume_id': volume.id,
+    #     'updates': {
+    #         'provider_id': new_provider_id,
+    #         'provider_location': new_provider_location,
+    #         'replication_status': fields.ReplicationStatus.FAILOVER_ERROR,
+    #         ...
+    #     }
+    # }
+    model_update['updates']['replication_status'] = (
+        fields.ReplicationStatus.FAILOVER_ERROR
+    )
+    return model_update

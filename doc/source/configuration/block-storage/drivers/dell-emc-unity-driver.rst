@@ -15,7 +15,7 @@ Prerequisites
 +===================+=================+
 | Unity OE          | 4.1.X or newer  |
 +-------------------+-----------------+
-| storops           | 0.5.12 or newer |
+| storops           | 1.1.0 or newer  |
 +-------------------+-----------------+
 
 
@@ -35,7 +35,13 @@ Supported operations
 - Efficient non-disruptive volume backup.
 - Revert a volume to a snapshot.
 - Create thick volumes.
+- Create and delete consistent groups.
+- Add/remove volumes to/from a consistent group.
+- Create and delete consistent group snapshots.
+- Clone a consistent group.
+- Create a consistent group from a snapshot.
 - Attach a volume to multiple servers simultaneously (multiattach).
+- Volume replications.
 
 Driver configuration
 ~~~~~~~~~~~~~~~~~~~~
@@ -199,18 +205,6 @@ List the port ID with the :command:`uemcli` command:
    "spb_iom_0_fc0","SP B I/O Module 0 FC Port 0","spb", ...
    ...
 
-Force delete attached snapshots option
---------------------------------------
-
-Set the option to ``True`` to force delete the snapshot even if it is attached
-to hosts. Enable it carefully, force deleting an attached snapshot could cause
-data unaccessble and/or data loss.
-
-.. code-block:: ini
-
-   force_delete_attached_snapshots = True
-
-
 Live migration integration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -263,7 +257,7 @@ following commands to create a thick volume.
 
 
 Compressed volume support
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Unity driver supports ``compressed volume`` creation, modification and
 deletion. In order to create a compressed volume, a volume type which
@@ -275,6 +269,27 @@ enables compression support needs to be created first:
    $ openstack volume type set --property provisioning:type=compressed --property compression_support='<is> True' CompressedVolumeType
 
 Then create volume and specify the new created volume type.
+
+.. note:: In Unity, only All-Flash pools support compressed volume, for the
+          other type of pools, "'compression_support': False" will be
+          returned when getting pool stats.
+
+
+Storage-assisted volume migration support
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Unity driver supports storage-assisted volume migration, when the user starts
+migrating with ``cinder migrate --force-host-copy False <volume_id> <host>`` or
+``cinder migrate <volume_id> <host>``, cinder will try to leverage the Unity's
+native volume migration functionality. If Unity fails to migrate the volume,
+host-assisted migration will be triggered.
+
+In the following scenarios, Unity storage-assisted volume migration will not be
+triggered. Instead, host-assisted volume migration will be triggered:
+
+- Volume is to be migrated across backends.
+- Migration of cloned volume. For example, if vol_2 was cloned from vol_1,
+  the storage-assisted volume migration of vol_2 will not be triggered.
 
 
 QoS support
@@ -375,7 +390,84 @@ Force detach volume from all hosts
 The user could use `os-force_detach` action to detach a volume from all its
 attached hosts.
 For more detail, please refer to
-https://developer.openstack.org/api-ref/block-storage/v2/?expanded=force-detach-volume-detail#force-detach-volume
+https://docs.openstack.org/api-ref/block-storage/v2/?expanded=force-detach-volume-detail#force-detach-volume
+
+Consistent group support
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+For a group to support consistent group snapshot, the group specs in the
+corresponding group type should have the following entry:
+
+.. code-block:: ini
+
+    {'consistent_group_snapshot_enabled': <is> True}
+
+Similarly, for a volume to be in a group that supports consistent group
+snapshots, the volume type extra specs would also have the following entry:
+
+.. code-block:: ini
+
+    {'consistent_group_snapshot_enabled': <is> True}
+
+Refer to :doc:`/admin/blockstorage-groups`
+for command lines detail.
+
+Volume replications
+~~~~~~~~~~~~~~~~~~~
+
+To enable volume replications, follow below steps:
+
+1. On Unisphere, configure remote system and interfaces for replications.
+
+The way could be different depending on the type of replications - sync or async.
+Refer to `Unity Replication White Paper
+<https://www.emc.com/collateral/white-papers/h15088-dell-emc-unity-replication-technologies.pdf>`_
+for more detail.
+
+2. Add `replication_device` to storage backend settings in `cinder.conf`, then
+   restart Cinder Volume service.
+
+    Example of `cinder.conf` for volume replications:
+
+    .. code-block:: ini
+
+        [unity-primary]
+        san_ip = xxx.xxx.xxx.xxx
+        ...
+        replication_device = backend_id:unity-secondary,san_ip:yyy.yyy.yyy.yyy,san_password:****,max_time_out_of_sync:60
+
+    - Only one `replication_device` can be configured for each primary backend.
+    - Keys `backend_id`, `san_ip`, `san_password`, and `max_time_out_of_sync`
+      are supported in `replication_device`, while `backend_id` and `san_ip`
+      are required.
+    - `san_password` uses the same one as primary backend's if it is omitted.
+    - `max_time_out_of_sync` is the max time in minutes replications are out of
+      sync. It must be equal or greater than `0`. `0` means sync replications
+      of volumes will be created. Note that remote systems for sync replications
+      need to be created on Unity first. `60` will be used if it is omitted.
+
+#. Create a volume type with property `replication_enabled='<is> True'`.
+
+    .. code-block:: console
+
+        $ openstack volume type create --property replication_enabled='<is> True' type-replication
+
+#. Any volumes with volume type of step #3 will failover to secondary backend
+   after `failover_host` is executed.
+
+    .. code-block:: console
+
+        $ cinder failover-host --backend_id unity-secondary stein@unity-primary
+
+#. Later, they could be failed back.
+
+    .. code-block:: console
+
+        $ cinder failover-host --backend_id default stein@unity-primary
+
+.. note:: The volume can be deleted even when it is participating in a
+    replication. The replication session will be deleted from Unity before the
+    LUN is deleted.
 
 Troubleshooting
 ~~~~~~~~~~~~~~~

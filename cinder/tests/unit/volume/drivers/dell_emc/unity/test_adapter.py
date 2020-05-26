@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 - 2018 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -15,16 +15,19 @@
 
 import contextlib
 import functools
-import unittest
 
+import ddt
 import mock
 from oslo_utils import units
 
 from cinder import exception
+from cinder import test
 from cinder.tests.unit.volume.drivers.dell_emc.unity \
     import fake_exception as ex
 from cinder.tests.unit.volume.drivers.dell_emc.unity import test_client
 from cinder.volume.drivers.dell_emc.unity import adapter
+from cinder.volume.drivers.dell_emc.unity import client
+from cinder.volume.drivers.dell_emc.unity import replication
 
 
 ########################
@@ -43,8 +46,9 @@ class MockConfig(object):
         self.san_ip = '1.2.3.4'
         self.san_login = 'user'
         self.san_password = 'pass'
-        self.driver_ssl_cert_verify = False
+        self.driver_ssl_cert_verify = True
         self.driver_ssl_cert_path = None
+        self.remove_empty_host = False
 
     def safe_get(self, name):
         return getattr(self, name)
@@ -59,6 +63,8 @@ class MockConnector(object):
 class MockDriver(object):
     def __init__(self):
         self.configuration = mock.Mock(volume_dd_blocksize='1M')
+        self.replication_manager = MockReplicationManager()
+        self.protocol = 'iSCSI'
 
     @staticmethod
     def _connect_device(conn):
@@ -66,18 +72,45 @@ class MockDriver(object):
                 'device': {'path': 'dev'},
                 'conn': {'data': {}}}
 
+    def get_version(self):
+        return '1.0.0'
+
+
+class MockReplicationManager(object):
+    def __init__(self):
+        self.is_replication_configured = False
+        self.replication_devices = {}
+        self.active_backend_id = None
+        self.is_service_failed_over = None
+        self.default_device = None
+        self.active_adapter = None
+
+    def failover_service(self, backend_id):
+        if backend_id == 'default':
+            self.is_service_failed_over = False
+        elif backend_id == 'secondary_unity':
+            self.is_service_failed_over = True
+        else:
+            raise exception.VolumeBackendAPIException()
+
 
 class MockClient(object):
     def __init__(self):
         self._system = test_client.MockSystem()
+        self.host = '10.10.10.10'  # fake unity IP
 
     @staticmethod
     def get_pools():
         return test_client.MockResourceList(['pool0', 'pool1'])
 
     @staticmethod
-    def create_lun(name, size, pool, description=None, io_limit_policy=None):
-        return test_client.MockResource(_id=name, name=name)
+    def create_lun(name, size, pool, description=None, io_limit_policy=None,
+                   is_thin=None, is_compressed=None):
+        lun_id = name
+        if is_thin is not None and not is_thin:
+            lun_id += '_thick'
+
+        return test_client.MockResource(_id=lun_id, name=name)
 
     @staticmethod
     def get_lun(name=None, lun_id=None):
@@ -131,6 +164,15 @@ class MockClient(object):
         return test_client.MockResource(name=name)
 
     @staticmethod
+    def create_host_wo_lock(name):
+        return test_client.MockResource(name=name)
+
+    @staticmethod
+    def delete_host_wo_lock(host):
+        if host.name == 'empty-host':
+            raise ex.HostDeleteIsCalled()
+
+    @staticmethod
     def attach(host, lun_or_snap):
         return 10
 
@@ -139,6 +181,12 @@ class MockClient(object):
         error_ids = ['lun_43', 'snap_0']
         if host.name == 'host1' and lun_or_snap.get_id() in error_ids:
             raise ex.DetachIsCalled()
+
+    @staticmethod
+    def detach_all(lun):
+        error_ids = ['lun_44']
+        if lun.get_id() in error_ids:
+            raise ex.DetachAllIsCalled()
 
     @staticmethod
     def get_iscsi_target_info(allowed_ports=None):
@@ -181,6 +229,8 @@ class MockClient(object):
         if (obj.name, name) in (
                 ('snap_61', 'lun_60'), ('lun_63', 'lun_60')):
             return test_client.MockResource(_id=name)
+        elif (obj.name, name) in (('snap_71', 'lun_70'), ('lun_72', 'lun_70')):
+            raise ex.UnityThinCloneNotAllowedError()
         else:
             raise ex.UnityThinCloneLimitExceededError
 
@@ -191,6 +241,55 @@ class MockClient(object):
     @property
     def system(self):
         return self._system
+
+    def restore_snapshot(self, snap_name):
+        return test_client.MockResource(name="back_snap")
+
+    def get_pool_id_by_name(self, name):
+        pools = {'PoolA': 'pool_1',
+                 'PoolB': 'pool_2',
+                 'PoolC': 'pool_3'}
+        return pools.get(name, None)
+
+    def migrate_lun(self, lun_id, dest_pool_id):
+        if dest_pool_id == 'pool_2':
+            return True
+        if dest_pool_id == 'pool_3':
+            return False
+
+    def get_remote_system(self, name=None):
+        if name == 'not-found-remote-system':
+            return None
+
+        return test_client.MockResource(_id='RS_1')
+
+    def get_replication_session(self, name=None):
+        if name == 'not-found-rep-session':
+            raise client.ClientReplicationError()
+
+        rep_session = test_client.MockResource(_id='rep_session_id_1')
+        rep_session.name = name
+        rep_session.src_resource_id = 'sv_1'
+        rep_session.dst_resource_id = 'sv_99'
+        return rep_session
+
+    def create_replication(self, src_lun, max_time_out_of_sync,
+                           dst_pool_id, remote_system):
+        if (src_lun.get_id() == 'sv_1' and max_time_out_of_sync == 60
+                and dst_pool_id == 'pool_1'
+                and remote_system.get_id() == 'RS_1'):
+            rep_session = test_client.MockResource(_id='rep_session_id_1')
+            rep_session.name = 'rep_session_name_1'
+            return rep_session
+        return None
+
+    def failover_replication(self, rep_session):
+        if rep_session.name != 'rep_session_name_1':
+            raise client.ClientReplicationError()
+
+    def failback_replication(self, rep_session):
+        if rep_session.name != 'rep_session_name_1':
+            raise client.ClientReplicationError()
 
 
 class MockLookupService(object):
@@ -213,12 +312,37 @@ class MockOSResource(mock.Mock):
             self.name = kwargs['name']
 
 
+def mock_replication_device(device_conf=None, serial_number=None,
+                            max_time_out_of_sync=None,
+                            destination_pool_id=None):
+    if device_conf is None:
+        device_conf = {
+            'backend_id': 'secondary_unity',
+            'san_ip': '2.2.2.2'
+        }
+
+    if serial_number is None:
+        serial_number = 'SECONDARY_UNITY_SN'
+
+    if max_time_out_of_sync is None:
+        max_time_out_of_sync = 60
+
+    if destination_pool_id is None:
+        destination_pool_id = 'pool_1'
+
+    rep_device = replication.ReplicationDevice(device_conf, MockDriver())
+    rep_device._adapter = mock_adapter(adapter.CommonAdapter)
+    rep_device._adapter._serial_number = serial_number
+    rep_device.max_time_out_of_sync = max_time_out_of_sync
+    rep_device._dst_pool = test_client.MockResource(_id=destination_pool_id)
+    return rep_device
+
+
 def mock_adapter(driver_clz):
     ret = driver_clz()
     ret._client = MockClient()
     with mock.patch('cinder.volume.drivers.dell_emc.unity.adapter.'
-                    'CommonAdapter.validate_ports'), \
-            patch_storops():
+                    'CommonAdapter.validate_ports'), patch_storops():
         ret.do_setup(MockDriver(), MockConfig())
     ret.lookup_service = MockLookupService()
     return ret
@@ -252,8 +376,17 @@ def get_connection_info(adapter, hlu, host, connector):
     return {}
 
 
+def get_volume_type_extra_specs(type_id):
+    if type_id == 'thick':
+        return {'provisioning:type': 'thick',
+                'thick_provisioning_support': '<is> True'}
+    return {}
+
+
 def patch_for_unity_adapter(func):
     @functools.wraps(func)
+    @mock.patch('cinder.volume.volume_types.get_volume_type_extra_specs',
+                new=get_volume_type_extra_specs)
     @mock.patch('cinder.volume.drivers.dell_emc.unity.utils.'
                 'get_backend_qos_specs',
                 new=get_backend_qos_specs)
@@ -274,6 +407,7 @@ def patch_for_concrete_adapter(clz_str):
                     new=get_connection_info)
         def func_wrapper(*args, **kwargs):
             return func(*args, **kwargs)
+
         return func_wrapper
 
     return inner_decorator
@@ -281,7 +415,6 @@ def patch_for_concrete_adapter(clz_str):
 
 patch_for_iscsi_adapter = patch_for_concrete_adapter(
     'cinder.volume.drivers.dell_emc.unity.adapter.ISCSIAdapter')
-
 
 patch_for_fc_adapter = patch_for_concrete_adapter(
     'cinder.volume.drivers.dell_emc.unity.adapter.FCAdapter')
@@ -303,7 +436,7 @@ def patch_dd_copy(copied_lun):
 
 @contextlib.contextmanager
 def patch_copy_volume():
-    with mock.patch('cinder.volume.utils.copy_volume') as mocked:
+    with mock.patch('cinder.volume.volume_utils.copy_volume') as mocked:
         yield mocked
 
 
@@ -328,9 +461,13 @@ class IdMatcher(object):
 #
 ########################
 
+@ddt.ddt
 @mock.patch.object(adapter, 'storops_ex', new=ex)
-class CommonAdapterTest(unittest.TestCase):
+@mock.patch.object(adapter.volume_utils, 'is_group_a_cg_snapshot_type',
+                   new=lambda x: True)
+class CommonAdapterTest(test.TestCase):
     def setUp(self):
+        super(CommonAdapterTest, self).setUp()
         self.adapter = mock_adapter(adapter.CommonAdapter)
 
     def test_get_managed_pools(self):
@@ -341,7 +478,27 @@ class CommonAdapterTest(unittest.TestCase):
 
     @patch_for_unity_adapter
     def test_create_volume(self):
-        volume = MockOSResource(name='lun_3', size=5, host='unity#pool1')
+        volume = MockOSResource(name='lun_3', size=5, host='unity#pool1',
+                                group=None)
+        ret = self.adapter.create_volume(volume)
+        expected = get_lun_pl('lun_3')
+        self.assertEqual(expected, ret['provider_location'])
+
+    @patch_for_unity_adapter
+    def test_create_volume_thick(self):
+        volume = MockOSResource(name='lun_3', size=5, host='unity#pool1',
+                                group=None, volume_type_id='thick')
+        ret = self.adapter.create_volume(volume)
+
+        expected = get_lun_pl('lun_3_thick')
+        self.assertEqual(expected, ret['provider_location'])
+
+    @patch_for_unity_adapter
+    def test_create_compressed_volume(self):
+        volume_type = MockOSResource(
+            extra_specs={'compression_support': '<is> True'})
+        volume = MockOSResource(name='lun_3', size=5, host='unity#pool1',
+                                group=None, volume_type=volume_type)
         ret = self.adapter.create_volume(volume)
         expected = get_lun_pl('lun_3')
         self.assertEqual(expected, ret['provider_location'])
@@ -384,16 +541,39 @@ class CommonAdapterTest(unittest.TestCase):
         self.assertEqual(2, stats['free_capacity_gb'])
         self.assertEqual(300, stats['max_over_subscription_ratio'])
         self.assertEqual(5, stats['reserved_percentage'])
-        self.assertFalse(stats['thick_provisioning_support'])
+        self.assertTrue(stats['thick_provisioning_support'])
         self.assertTrue(stats['thin_provisioning_support'])
+        self.assertTrue(stats['compression_support'])
+        self.assertTrue(stats['consistent_group_snapshot_enabled'])
+        self.assertFalse(stats['replication_enabled'])
+        self.assertEqual(0, len(stats['replication_targets']))
 
     def test_update_volume_stats(self):
         stats = self.adapter.update_volume_stats()
         self.assertEqual('backend', stats['volume_backend_name'])
         self.assertEqual('unknown', stats['storage_protocol'])
         self.assertTrue(stats['thin_provisioning_support'])
-        self.assertFalse(stats['thick_provisioning_support'])
+        self.assertTrue(stats['thick_provisioning_support'])
+        self.assertTrue(stats['consistent_group_snapshot_enabled'])
+        self.assertFalse(stats['replication_enabled'])
+        self.assertEqual(0, len(stats['replication_targets']))
         self.assertEqual(1, len(stats['pools']))
+
+    def test_get_replication_stats(self):
+        self.adapter.replication_manager.is_replication_configured = True
+        self.adapter.replication_manager.replication_devices = {
+            'secondary_unity': None
+        }
+
+        stats = self.adapter.update_volume_stats()
+        self.assertTrue(stats['replication_enabled'])
+        self.assertEqual(['secondary_unity'], stats['replication_targets'])
+
+        self.assertEqual(1, len(stats['pools']))
+        pool_stats = stats['pools'][0]
+        self.assertTrue(pool_stats['replication_enabled'])
+        self.assertEqual(['secondary_unity'],
+                         pool_stats['replication_targets'])
 
     def test_serial_number(self):
         self.assertEqual('CLIENT_SERIAL', self.adapter.serial_number)
@@ -402,7 +582,7 @@ class CommonAdapterTest(unittest.TestCase):
         self.assertEqual('1.2.3.4', self.adapter.ip)
         self.assertEqual('user', self.adapter.username)
         self.assertEqual('pass', self.adapter.password)
-        self.assertFalse(self.adapter.array_cert_verify)
+        self.assertTrue(self.adapter.array_cert_verify)
         self.assertIsNone(self.adapter.array_ca_cert_path)
 
     def test_do_setup_version_before_4_1(self):
@@ -411,6 +591,7 @@ class CommonAdapterTest(unittest.TestCase):
                             'CommonAdapter.validate_ports'):
                 self.adapter._client.system.system_version = '4.0.0'
                 self.adapter.do_setup(self.adapter.driver, MockConfig())
+
         self.assertRaises(exception.VolumeBackendAPIException, f)
 
     def test_verify_cert_false_path_none(self):
@@ -436,19 +617,55 @@ class CommonAdapterTest(unittest.TestCase):
 
     def test_terminate_connection_volume(self):
         def f():
-            volume = MockOSResource(provider_location='id^lun_43', id='id_43')
+            volume = MockOSResource(provider_location='id^lun_43', id='id_43',
+                                    volume_attachment=None)
             connector = {'host': 'host1'}
             self.adapter.terminate_connection(volume, connector)
 
         self.assertRaises(ex.DetachIsCalled, f)
 
+    def test_terminate_connection_force_detach(self):
+        def f():
+            volume = MockOSResource(provider_location='id^lun_44', id='id_44',
+                                    volume_attachment=None)
+            self.adapter.terminate_connection(volume, None)
+
+        self.assertRaises(ex.DetachAllIsCalled, f)
+
     def test_terminate_connection_snapshot(self):
         def f():
             connector = {'host': 'host1'}
-            snap = MockOSResource(name='snap_0', id='snap_0')
+            snap = MockOSResource(name='snap_0', id='snap_0',
+                                  volume_attachment=None)
             self.adapter.terminate_connection_snapshot(snap, connector)
 
         self.assertRaises(ex.DetachIsCalled, f)
+
+    def test_terminate_connection_remove_empty_host(self):
+        self.adapter.remove_empty_host = True
+
+        def f():
+            connector = {'host': 'empty-host'}
+            vol = MockOSResource(provider_location='id^lun_45', id='id_45',
+                                 volume_attachment=None)
+            self.adapter.terminate_connection(vol, connector)
+
+        self.assertRaises(ex.HostDeleteIsCalled, f)
+
+    def test_terminate_connection_multiattached_volume(self):
+        def f():
+            connector = {'host': 'host1'}
+            attachments = [MockOSResource(id='id-1',
+                                          attach_status='attached',
+                                          attached_host='host1'),
+                           MockOSResource(id='id-2',
+                                          attach_status='attached',
+                                          attached_host='host1')]
+            vol = MockOSResource(provider_location='id^lun_45', id='id_45',
+                                 volume_attachment=attachments)
+            self.adapter.terminate_connection(vol, connector)
+
+        self.assertIsNone(f())
 
     def test_manage_existing_by_name(self):
         ref = {'source-id': 12}
@@ -573,6 +790,7 @@ class CommonAdapterTest(unittest.TestCase):
         volume = MockOSResource(name=lun_id, id=lun_id, host='unity#pool1',
                                 provider_location=get_lun_pl(lun_id))
         src_snap = test_client.MockResource(name=src_snap_id, _id=src_snap_id)
+        src_snap.size = 5 * units.Gi
         src_snap.storage_resource = test_client.MockResource(name=src_lun_id,
                                                              _id=src_lun_id)
         with patch_copy_volume() as copy_volume:
@@ -650,6 +868,20 @@ class CommonAdapterTest(unittest.TestCase):
                                                               new_dd_lun)
         self.assertEqual(IdMatcher(test_client.MockResource(_id=lun_id)), ret)
 
+    @patch_for_unity_adapter
+    def test_thin_clone_thick(self):
+        lun_id = 'lun_70'
+        src_snap_id = 'snap_71'
+        volume = MockOSResource(name=lun_id, id=lun_id, size=1,
+                                provider_location=get_snap_lun_pl(lun_id))
+        src_snap = test_client.MockResource(name=src_snap_id, _id=src_snap_id)
+        new_dd_lun = test_client.MockResource(name='lun_73')
+        with patch_storops(), patch_dd_copy(new_dd_lun) as dd:
+            vol_params = adapter.VolumeParams(self.adapter, volume)
+            ret = self.adapter._thin_clone(vol_params, src_snap)
+            dd.assert_called_with(vol_params, src_snap, src_lun=None)
+        self.assertEqual(ret, new_dd_lun)
+
     def test_extend_volume_error(self):
         def f():
             volume = MockOSResource(id='l56',
@@ -674,20 +906,497 @@ class CommonAdapterTest(unittest.TestCase):
         self.assertEqual(['spa_eth2'], normalized.unity_io_ports)
 
     def test_normalize_config_raise(self):
-        with self.assertRaisesRegexp(exception.InvalidConfigurationValue,
-                                     'unity_storage_pool_names'):
+        with self.assertRaisesRegex(exception.InvalidConfigurationValue,
+                                    'unity_storage_pool_names'):
             config = MockConfig()
             config.unity_storage_pool_names = ['', '    ']
             self.adapter.normalize_config(config)
-        with self.assertRaisesRegexp(exception.InvalidConfigurationValue,
-                                     'unity_io_ports'):
+        with self.assertRaisesRegex(exception.InvalidConfigurationValue,
+                                    'unity_io_ports'):
             config = MockConfig()
             config.unity_io_ports = ['', '   ']
             self.adapter.normalize_config(config)
 
+    def test_restore_snapshot(self):
+        volume = MockOSResource(id='1', name='vol_1')
+        snapshot = MockOSResource(id='2', name='snap_1')
+        self.adapter.restore_snapshot(volume, snapshot)
 
-class FCAdapterTest(unittest.TestCase):
+    def test_get_pool_id_by_name(self):
+        pool_name = 'PoolA'
+        pool_id = self.adapter.get_pool_id_by_name(pool_name)
+        self.assertEqual('pool_1', pool_id)
+
+    def test_migrate_volume(self):
+        provider_location = 'id^1|system^FNM001|type^lun|version^05.00'
+        volume = MockOSResource(id='1', name='vol_1',
+                                host='HostA@BackendB#PoolA',
+                                provider_location=provider_location)
+        host = {'host': 'HostA@BackendB#PoolB'}
+        ret = self.adapter.migrate_volume(volume, host)
+        self.assertEqual((True, {}), ret)
+
+    def test_migrate_volume_failed(self):
+        provider_location = 'id^1|system^FNM001|type^lun|version^05.00'
+        volume = MockOSResource(id='1', name='vol_1',
+                                host='HostA@BackendB#PoolA',
+                                provider_location=provider_location)
+        host = {'host': 'HostA@BackendB#PoolC'}
+        ret = self.adapter.migrate_volume(volume, host)
+        self.assertEqual((False, None), ret)
+
+    def test_migrate_volume_cross_backends(self):
+        provider_location = 'id^1|system^FNM001|type^lun|version^05.00'
+        volume = MockOSResource(id='1', name='vol_1',
+                                host='HostA@BackendA#PoolA',
+                                provider_location=provider_location)
+        host = {'host': 'HostA@BackendB#PoolB'}
+        ret = self.adapter.migrate_volume(volume, host)
+        self.assertEqual((False, None), ret)
+
+    @ddt.unpack
+    @ddt.data((('group-1', 'group-1_name', 'group-1_description'),
+               ('group-1', 'group-1_description')),
+              (('group-2', 'group-2_name', None), ('group-2', 'group-2_name')),
+              (('group-3', 'group-3_name', ''), ('group-3', 'group-3_name')))
+    def test_create_group(self, inputs, expected):
+        cg_id, cg_name, cg_description = inputs
+        cg = MockOSResource(id=cg_id, name=cg_name, description=cg_description)
+        with mock.patch.object(self.adapter.client, 'create_cg',
+                               create=True) as mocked:
+            model_update = self.adapter.create_group(cg)
+            self.assertEqual('available', model_update['status'])
+            mocked.assert_called_once_with(expected[0],
+                                           description=expected[1])
+
+    def test_delete_group(self):
+        cg = MockOSResource(id='group-1')
+        with mock.patch.object(self.adapter.client, 'delete_cg',
+                               create=True) as mocked:
+            ret = self.adapter.delete_group(cg)
+            self.assertIsNone(ret[0])
+            self.assertIsNone(ret[1])
+            mocked.assert_called_once_with('group-1')
+
+    def test_update_group(self):
+        cg = MockOSResource(id='group-1')
+        add_volumes = [MockOSResource(id=vol_id,
+                                      provider_location=get_lun_pl(lun_id))
+                       for vol_id, lun_id in (('volume-1', 'sv_1'),
+                                              ('volume-2', 'sv_2'))]
+        remove_volumes = [MockOSResource(
+            id='volume-3', provider_location=get_lun_pl('sv_3'))]
+        with mock.patch.object(self.adapter.client, 'update_cg',
+                               create=True) as mocked:
+            ret = self.adapter.update_group(cg, add_volumes, remove_volumes)
+            self.assertEqual('available', ret[0]['status'])
+            self.assertIsNone(ret[1])
+            self.assertIsNone(ret[2])
+            mocked.assert_called_once_with('group-1', {'sv_1', 'sv_2'},
+                                           {'sv_3'})
+
+    def test_update_group_add_volumes_none(self):
+        cg = MockOSResource(id='group-1')
+        remove_volumes = [MockOSResource(
+            id='volume-3', provider_location=get_lun_pl('sv_3'))]
+        with mock.patch.object(self.adapter.client, 'update_cg',
+                               create=True) as mocked:
+            ret = self.adapter.update_group(cg, None, remove_volumes)
+            self.assertEqual('available', ret[0]['status'])
+            self.assertIsNone(ret[1])
+            self.assertIsNone(ret[2])
+            mocked.assert_called_once_with('group-1', set(), {'sv_3'})
+
+    def test_update_group_remove_volumes_none(self):
+        cg = MockOSResource(id='group-1')
+        add_volumes = [MockOSResource(id=vol_id,
+                                      provider_location=get_lun_pl(lun_id))
+                       for vol_id, lun_id in (('volume-1', 'sv_1'),
+                                              ('volume-2', 'sv_2'))]
+        with mock.patch.object(self.adapter.client, 'update_cg',
+                               create=True) as mocked:
+            ret = self.adapter.update_group(cg, add_volumes, None)
+            self.assertEqual('available', ret[0]['status'])
+            self.assertIsNone(ret[1])
+            self.assertIsNone(ret[2])
+            mocked.assert_called_once_with('group-1', {'sv_1', 'sv_2'}, set())
+
+    def test_update_group_add_remove_volumes_none(self):
+        cg = MockOSResource(id='group-1')
+        with mock.patch.object(self.adapter.client, 'update_cg',
+                               create=True) as mocked:
+            ret = self.adapter.update_group(cg, None, None)
+            self.assertEqual('available', ret[0]['status'])
+            self.assertIsNone(ret[1])
+            self.assertIsNone(ret[2])
+            mocked.assert_called_once_with('group-1', set(), set())
+
+    @patch_for_unity_adapter
+    def test_copy_luns_in_group(self):
+        cg = MockOSResource(id='group-1')
+        volumes = [MockOSResource(id=vol_id,
+                                  provider_location=get_lun_pl(lun_id))
+                   for vol_id, lun_id in (('volume-3', 'sv_3'),
+                                          ('volume-4', 'sv_4'))]
+        src_cg_snap = test_client.MockResource(_id='id_src_cg_snap')
+        src_volumes = [MockOSResource(id=vol_id,
+                                      provider_location=get_lun_pl(lun_id))
+                       for vol_id, lun_id in (('volume-1', 'sv_1'),
+                                              ('volume-2', 'sv_2'))]
+        copied_luns = [test_client.MockResource(_id=lun_id)
+                       for lun_id in ('sv_3', 'sv_4')]
+
+        def _prepare_lun_snaps(lun_id):
+            lun_snap = test_client.MockResource(_id='snap_{}'.format(lun_id))
+            lun_snap.lun = test_client.MockResource(_id=lun_id)
+            return lun_snap
+
+        lun_snaps = list(map(_prepare_lun_snaps, ('sv_1', 'sv_2')))
+        with mock.patch.object(self.adapter.client, 'filter_snaps_in_cg_snap',
+                               create=True) as mocked_filter, \
+                mock.patch.object(self.adapter.client, 'create_cg',
+                                  create=True) as mocked_create_cg, \
+                patch_dd_copy(None) as mocked_dd:
+            mocked_filter.return_value = lun_snaps
+            mocked_dd.side_effect = copied_luns
+
+            ret = self.adapter.copy_luns_in_group(cg, volumes, src_cg_snap,
+                                                  src_volumes)
+
+            mocked_filter.assert_called_once_with('id_src_cg_snap')
+            dd_args = zip([adapter.VolumeParams(self.adapter, vol)
+                           for vol in volumes],
+                          lun_snaps)
+            mocked_dd.assert_has_calls([mock.call(*args) for args in dd_args])
+            mocked_create_cg.assert_called_once_with('group-1',
+                                                     lun_add=copied_luns)
+            self.assertEqual('available', ret[0]['status'])
+            self.assertEqual(2, len(ret[1]))
+            for vol_id in ('volume-3', 'volume-4'):
+                self.assertIn({'id': vol_id, 'status': 'available'}, ret[1])
+
+    def test_create_group_from_snap(self):
+        cg = MockOSResource(id='group-2')
+        volumes = [MockOSResource(id=vol_id,
+                                  provider_location=get_lun_pl(lun_id))
+                   for vol_id, lun_id in (('volume-3', 'sv_3'),
+                                          ('volume-4', 'sv_4'))]
+        cg_snap = MockOSResource(id='snap-group-1')
+        vol_1 = MockOSResource(id='volume-1')
+        vol_2 = MockOSResource(id='volume-2')
+        vol_snaps = [MockOSResource(id='snap-volume-1', volume=vol_1),
+                     MockOSResource(id='snap-volume-2', volume=vol_2)]
+
+        src_cg_snap = test_client.MockResource(_id='id_src_cg_snap')
+        with mock.patch.object(self.adapter.client, 'get_snap',
+                               create=True, return_value=src_cg_snap), \
+                mock.patch.object(self.adapter, 'copy_luns_in_group',
+                                  create=True) as mocked_copy:
+            mocked_copy.return_value = ({'status': 'available'},
+                                        [{'id': 'volume-3',
+                                          'status': 'available'},
+                                         {'id': 'volume-4',
+                                          'status': 'available'}])
+            ret = self.adapter.create_group_from_snap(cg, volumes, cg_snap,
+                                                      vol_snaps)
+
+            mocked_copy.assert_called_once_with(cg, volumes, src_cg_snap,
+                                                [vol_1, vol_2])
+            self.assertEqual('available', ret[0]['status'])
+            self.assertEqual(2, len(ret[1]))
+            for vol_id in ('volume-3', 'volume-4'):
+                self.assertIn({'id': vol_id, 'status': 'available'}, ret[1])
+
+    def test_create_group_from_snap_none_snapshots(self):
+        cg = MockOSResource(id='group-2')
+        volumes = [MockOSResource(id=vol_id,
+                                  provider_location=get_lun_pl(lun_id))
+                   for vol_id, lun_id in (('volume-3', 'sv_3'),
+                                          ('volume-4', 'sv_4'))]
+        cg_snap = MockOSResource(id='snap-group-1')
+
+        src_cg_snap = test_client.MockResource(_id='id_src_cg_snap')
+        with mock.patch.object(self.adapter.client, 'get_snap',
+                               create=True, return_value=src_cg_snap), \
+                mock.patch.object(self.adapter, 'copy_luns_in_group',
+                                  create=True) as mocked_copy:
+            mocked_copy.return_value = ({'status': 'available'},
+                                        [{'id': 'volume-3',
+                                          'status': 'available'},
+                                         {'id': 'volume-4',
+                                          'status': 'available'}])
+            ret = self.adapter.create_group_from_snap(cg, volumes, cg_snap,
+                                                      None)
+
+            mocked_copy.assert_called_once_with(cg, volumes, src_cg_snap, [])
+            self.assertEqual('available', ret[0]['status'])
+            self.assertEqual(2, len(ret[1]))
+            for vol_id in ('volume-3', 'volume-4'):
+                self.assertIn({'id': vol_id, 'status': 'available'}, ret[1])
+
+    def test_create_cloned_group(self):
+        cg = MockOSResource(id='group-2')
+        volumes = [MockOSResource(id=vol_id,
+                                  provider_location=get_lun_pl(lun_id))
+                   for vol_id, lun_id in (('volume-3', 'sv_3'),
+                                          ('volume-4', 'sv_4'))]
+        src_cg = MockOSResource(id='group-1')
+        vol_1 = MockOSResource(id='volume-1')
+        vol_2 = MockOSResource(id='volume-2')
+        src_vols = [vol_1, vol_2]
+
+        src_cg_snap = test_client.MockResource(_id='id_src_cg_snap')
+        with mock.patch.object(self.adapter.client, 'create_cg_snap',
+                               create=True,
+                               return_value=src_cg_snap) as mocked_create, \
+                mock.patch.object(self.adapter, 'copy_luns_in_group',
+                                  create=True) as mocked_copy:
+            mocked_create.__name__ = 'create_cg_snap'
+            mocked_copy.return_value = ({'status': 'available'},
+                                        [{'id': 'volume-3',
+                                          'status': 'available'},
+                                         {'id': 'volume-4',
+                                          'status': 'available'}])
+            ret = self.adapter.create_cloned_group(cg, volumes, src_cg,
+                                                   src_vols)
+
+            mocked_create.assert_called_once_with('group-1',
+                                                  'snap_clone_group_group-1')
+
+            mocked_copy.assert_called_once_with(cg, volumes, src_cg_snap,
+                                                [vol_1, vol_2])
+            self.assertEqual('available', ret[0]['status'])
+            self.assertEqual(2, len(ret[1]))
+            for vol_id in ('volume-3', 'volume-4'):
+                self.assertIn({'id': vol_id, 'status': 'available'}, ret[1])
+
+    def test_create_cloned_group_none_source_vols(self):
+        cg = MockOSResource(id='group-2')
+        volumes = [MockOSResource(id=vol_id,
+                                  provider_location=get_lun_pl(lun_id))
+                   for vol_id, lun_id in (('volume-3', 'sv_3'),
+                                          ('volume-4', 'sv_4'))]
+        src_cg = MockOSResource(id='group-1')
+
+        src_cg_snap = test_client.MockResource(_id='id_src_cg_snap')
+        with mock.patch.object(self.adapter.client, 'create_cg_snap',
+                               create=True,
+                               return_value=src_cg_snap) as mocked_create, \
+                mock.patch.object(self.adapter, 'copy_luns_in_group',
+                                  create=True) as mocked_copy:
+            mocked_create.__name__ = 'create_cg_snap'
+            mocked_copy.return_value = ({'status': 'available'},
+                                        [{'id': 'volume-3',
+                                          'status': 'available'},
+                                         {'id': 'volume-4',
+                                          'status': 'available'}])
+            ret = self.adapter.create_cloned_group(cg, volumes, src_cg,
+                                                   None)
+
+            mocked_create.assert_called_once_with('group-1',
+                                                  'snap_clone_group_group-1')
+
+            mocked_copy.assert_called_once_with(cg, volumes, src_cg_snap, [])
+            self.assertEqual('available', ret[0]['status'])
+            self.assertEqual(2, len(ret[1]))
+            for vol_id in ('volume-3', 'volume-4'):
+                self.assertIn({'id': vol_id, 'status': 'available'}, ret[1])
+
+    def test_create_group_snapshot(self):
+        cg_snap = MockOSResource(id='snap-group-1', group_id='group-1')
+        vol_1 = MockOSResource(id='volume-1')
+        vol_2 = MockOSResource(id='volume-2')
+        vol_snaps = [MockOSResource(id='snap-volume-1', volume=vol_1),
+                     MockOSResource(id='snap-volume-2', volume=vol_2)]
+        with mock.patch.object(self.adapter.client, 'create_cg_snap',
+                               create=True) as mocked_create:
+            mocked_create.return_value = ({'status': 'available'},
+                                          [{'id': 'snap-volume-1',
+                                            'status': 'available'},
+                                           {'id': 'snap-volume-2',
+                                            'status': 'available'}])
+            ret = self.adapter.create_group_snapshot(cg_snap, vol_snaps)
+
+            mocked_create.assert_called_once_with('group-1',
+                                                  snap_name='snap-group-1')
+            self.assertEqual({'status': 'available'}, ret[0])
+            self.assertEqual(2, len(ret[1]))
+            for snap_id in ('snap-volume-1', 'snap-volume-2'):
+                self.assertIn({'id': snap_id, 'status': 'available'}, ret[1])
+
+    def test_delete_group_snapshot(self):
+        group_snap = MockOSResource(id='snap-group-1')
+        cg_snap = test_client.MockResource(_id='snap_cg_1')
+        with mock.patch.object(self.adapter.client, 'get_snap',
+                               create=True,
+                               return_value=cg_snap) as mocked_get, \
+                mock.patch.object(self.adapter.client, 'delete_snap',
+                                  create=True) as mocked_delete:
+            ret = self.adapter.delete_group_snapshot(group_snap)
+            mocked_get.assert_called_once_with('snap-group-1')
+            mocked_delete.assert_called_once_with(cg_snap)
+            self.assertEqual((None, None), ret)
+
+    def test_setup_replications(self):
+        secondary_device = mock_replication_device()
+
+        self.adapter.replication_manager.is_replication_configured = True
+        self.adapter.replication_manager.replication_devices = {
+            'secondary_unity': secondary_device
+        }
+        model_update = self.adapter.setup_replications(
+            test_client.MockResource(_id='sv_1'), {})
+
+        self.assertIn('replication_status', model_update)
+        self.assertEqual('enabled', model_update['replication_status'])
+
+        self.assertIn('replication_driver_data', model_update)
+        self.assertEqual('{"secondary_unity": "rep_session_name_1"}',
+                         model_update['replication_driver_data'])
+
+    def test_setup_replications_not_configured_replication(self):
+        model_update = self.adapter.setup_replications(
+            test_client.MockResource(_id='sv_1'), {})
+        self.assertEqual(0, len(model_update))
+
+    def test_setup_replications_raise(self):
+        secondary_device = mock_replication_device(
+            serial_number='not-found-remote-system')
+
+        self.adapter.replication_manager.is_replication_configured = True
+        self.adapter.replication_manager.replication_devices = {
+            'secondary_unity': secondary_device
+        }
+
+        self.assertRaises(exception.VolumeBackendAPIException,
+                          self.adapter.setup_replications,
+                          test_client.MockResource(_id='sv_1'),
+                          {})
+
+    @ddt.data({'failover_to': 'secondary_unity'},
+              {'failover_to': None})
+    @ddt.unpack
+    def test_failover(self, failover_to):
+        secondary_id = 'secondary_unity'
+        secondary_device = mock_replication_device()
+        self.adapter.replication_manager.is_replication_configured = True
+        self.adapter.replication_manager.replication_devices = {
+            secondary_id: secondary_device
+        }
+
+        volume = MockOSResource(
+            id='volume-id-1',
+            name='volume-name-1',
+            replication_driver_data='{"secondary_unity":"rep_session_name_1"}')
+        model_update = self.adapter.failover([volume],
+                                             secondary_id=failover_to)
+        self.assertEqual(3, len(model_update))
+        active_backend_id, volumes_update, groups_update = model_update
+        self.assertEqual(secondary_id, active_backend_id)
+        self.assertEqual([], groups_update)
+
+        self.assertEqual(1, len(volumes_update))
+        model_update = volumes_update[0]
+        self.assertIn('volume_id', model_update)
+        self.assertEqual('volume-id-1', model_update['volume_id'])
+        self.assertIn('updates', model_update)
+        self.assertEqual(
+            {'provider_id': 'sv_99',
+             'provider_location':
+                 'id^sv_99|system^SECONDARY_UNITY_SN|type^lun|version^None'},
+            model_update['updates'])
+        self.assertTrue(
+            self.adapter.replication_manager.is_service_failed_over)
+
+    def test_failover_raise(self):
+        secondary_id = 'secondary_unity'
+        secondary_device = mock_replication_device()
+        self.adapter.replication_manager.is_replication_configured = True
+        self.adapter.replication_manager.replication_devices = {
+            secondary_id: secondary_device
+        }
+
+        vol1 = MockOSResource(
+            id='volume-id-1',
+            name='volume-name-1',
+            replication_driver_data='{"secondary_unity":"rep_session_name_1"}')
+        vol2 = MockOSResource(
+            id='volume-id-2',
+            name='volume-name-2',
+            replication_driver_data='{"secondary_unity":"rep_session_name_2"}')
+        model_update = self.adapter.failover([vol1, vol2],
+                                             secondary_id=secondary_id)
+        active_backend_id, volumes_update, groups_update = model_update
+        self.assertEqual(secondary_id, active_backend_id)
+        self.assertEqual([], groups_update)
+
+        self.assertEqual(2, len(volumes_update))
+        m = volumes_update[0]
+        self.assertIn('volume_id', m)
+        self.assertEqual('volume-id-1', m['volume_id'])
+        self.assertIn('updates', m)
+        self.assertEqual(
+            {'provider_id': 'sv_99',
+             'provider_location':
+                 'id^sv_99|system^SECONDARY_UNITY_SN|type^lun|version^None'},
+            m['updates'])
+
+        m = volumes_update[1]
+        self.assertIn('volume_id', m)
+        self.assertEqual('volume-id-2', m['volume_id'])
+        self.assertIn('updates', m)
+        self.assertEqual({'replication_status': 'failover-error'},
+                         m['updates'])
+
+        self.assertTrue(
+            self.adapter.replication_manager.is_service_failed_over)
+
+    def test_failover_failback(self):
+        secondary_id = 'secondary_unity'
+        secondary_device = mock_replication_device()
+        self.adapter.replication_manager.is_replication_configured = True
+        self.adapter.replication_manager.replication_devices = {
+            secondary_id: secondary_device
+        }
+        default_device = mock_replication_device(
+            device_conf={
+                'backend_id': 'default',
+                'san_ip': '10.10.10.10'
+            }, serial_number='PRIMARY_UNITY_SN'
+        )
+        self.adapter.replication_manager.default_device = default_device
+        self.adapter.replication_manager.active_adapter = (
+            self.adapter.replication_manager.replication_devices[
+                secondary_id].adapter)
+        self.adapter.replication_manager.active_backend_id = secondary_id
+
+        volume = MockOSResource(
+            id='volume-id-1',
+            name='volume-name-1',
+            replication_driver_data='{"secondary_unity":"rep_session_name_1"}')
+        model_update = self.adapter.failover([volume],
+                                             secondary_id='default')
+        active_backend_id, volumes_update, groups_update = model_update
+        self.assertEqual('default', active_backend_id)
+        self.assertEqual([], groups_update)
+
+        self.assertEqual(1, len(volumes_update))
+        model_update = volumes_update[0]
+        self.assertIn('volume_id', model_update)
+        self.assertEqual('volume-id-1', model_update['volume_id'])
+        self.assertIn('updates', model_update)
+        self.assertEqual(
+            {'provider_id': 'sv_1',
+             'provider_location':
+                 'id^sv_1|system^PRIMARY_UNITY_SN|type^lun|version^None'},
+            model_update['updates'])
+        self.assertFalse(
+            self.adapter.replication_manager.is_service_failed_over)
+
+
+class FCAdapterTest(test.TestCase):
     def setUp(self):
+        super(FCAdapterTest, self).setUp()
         self.adapter = mock_adapter(adapter.FCAdapter)
 
     def test_setup(self):
@@ -761,7 +1470,37 @@ class FCAdapterTest(unittest.TestCase):
 
     def test_terminate_connection_auto_zone_enabled(self):
         connector = {'host': 'host1', 'wwpns': 'abcdefg'}
-        volume = MockOSResource(provider_location='id^lun_41', id='id_41')
+        volume = MockOSResource(provider_location='id^lun_41', id='id_41',
+                                volume_attachment=None)
+        ret = self.adapter.terminate_connection(volume, connector)
+        self.assertEqual('fibre_channel', ret['driver_volume_type'])
+        data = ret['data']
+        target_map = {
+            '200000051e55a100': ('100000051e55a100', '100000051e55a121'),
+            '200000051e55a121': ('100000051e55a100', '100000051e55a121')}
+        self.assertDictEqual(target_map, data['initiator_target_map'])
+        target_wwn = ['100000051e55a100', '100000051e55a121']
+        self.assertListEqual(target_wwn, data['target_wwn'])
+
+    def test_terminate_connection_auto_zone_enabled_none_host_luns(self):
+        connector = {'host': 'host-no-host_luns', 'wwpns': 'abcdefg'}
+        volume = MockOSResource(provider_location='id^lun_41', id='id_41',
+                                volume_attachment=None)
+        ret = self.adapter.terminate_connection(volume, connector)
+        self.assertEqual('fibre_channel', ret['driver_volume_type'])
+        data = ret['data']
+        target_map = {
+            '200000051e55a100': ('100000051e55a100', '100000051e55a121'),
+            '200000051e55a121': ('100000051e55a100', '100000051e55a121')}
+        self.assertDictEqual(target_map, data['initiator_target_map'])
+        target_wwn = ['100000051e55a100', '100000051e55a121']
+        self.assertListEqual(target_wwn, data['target_wwn'])
+
+    def test_terminate_connection_remove_empty_host_return_data(self):
+        self.adapter.remove_empty_host = True
+        connector = {'host': 'empty-host-return-data', 'wwpns': 'abcdefg'}
+        volume = MockOSResource(provider_location='id^lun_41', id='id_41',
+                                volume_attachment=None)
         ret = self.adapter.terminate_connection(volume, connector)
         self.assertEqual('fibre_channel', ret['driver_volume_type'])
         data = ret['data']
@@ -789,18 +1528,19 @@ class FCAdapterTest(unittest.TestCase):
         self.assertEqual(set(('spa_iom_0_fc0', 'spa_iom_0_fc1')), set(ports))
 
     def test_validate_ports_no_matched(self):
-        with self.assertRaisesRegexp(exception.InvalidConfigurationValue,
-                                     'unity_io_ports'):
+        with self.assertRaisesRegex(exception.InvalidConfigurationValue,
+                                    'unity_io_ports'):
             self.adapter.validate_ports(['spc_invalid'])
 
     def test_validate_ports_unmatched_whitelist(self):
-        with self.assertRaisesRegexp(exception.InvalidConfigurationValue,
-                                     'unity_io_ports'):
+        with self.assertRaisesRegex(exception.InvalidConfigurationValue,
+                                    'unity_io_ports'):
             self.adapter.validate_ports(['spa_iom*', 'spc_invalid'])
 
 
-class ISCSIAdapterTest(unittest.TestCase):
+class ISCSIAdapterTest(test.TestCase):
     def setUp(self):
+        super(ISCSIAdapterTest, self).setUp()
         self.adapter = mock_adapter(adapter.ISCSIAdapter)
 
     def test_iscsi_protocol(self):

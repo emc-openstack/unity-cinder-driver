@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 - 2018 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -24,19 +24,20 @@ from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import importutils
 
+from cinder import exception
+from cinder.i18n import _
+from cinder.objects import fields
+from cinder import utils as cinder_utils
+from cinder.volume.drivers.dell_emc.unity import client
+from cinder.volume.drivers.dell_emc.unity import utils
+from cinder.volume import volume_utils
+
 storops = importutils.try_import('storops')
 if storops:
     from storops import exception as storops_ex
 else:
     # Set storops_ex to be None for unit test
     storops_ex = None
-
-from cinder import exception
-from cinder.i18n import _, _LE, _LI
-from cinder import utils as cinder_utils
-from cinder.volume.drivers.dell_emc.unity import client
-from cinder.volume.drivers.dell_emc.unity import utils
-from cinder.volume import utils as vol_utils
 
 LOG = logging.getLogger(__name__)
 
@@ -57,6 +58,10 @@ class VolumeParams(object):
                              else volume.display_name)
         self._pool = None
         self._io_limit_policy = None
+        self._is_thick = None
+        self._is_compressed = None
+        self._is_in_cg = None
+        self._is_replication_enabled = None
 
     @property
     def volume_id(self):
@@ -108,11 +113,60 @@ class VolumeParams(object):
     def io_limit_policy(self, value):
         self._io_limit_policy = value
 
+    @property
+    def is_thick(self):
+        if self._is_thick is None:
+            provision = utils.get_extra_spec(self._volume, 'provisioning:type')
+            support = utils.get_extra_spec(self._volume,
+                                           'thick_provisioning_support')
+            self._is_thick = (provision == 'thick' and support == '<is> True')
+        return self._is_thick
+
+    @property
+    def is_compressed(self):
+        if self._is_compressed is None:
+            provision = utils.get_extra_spec(self._volume, 'provisioning:type')
+            compression = utils.get_extra_spec(self._volume,
+                                               'compression_support')
+            if provision == 'compressed' and compression == '<is> True':
+                self._is_compressed = True
+        return self._is_compressed
+
+    @is_compressed.setter
+    def is_compressed(self, value):
+        self._is_compressed = value
+
+    @property
+    def is_in_cg(self):
+        if self._is_in_cg is None:
+            self._is_in_cg = (self._volume.group and
+                              volume_utils.is_group_a_cg_snapshot_type(
+                                  self._volume.group))
+        return self._is_in_cg
+
+    @property
+    def cg_id(self):
+        if self.is_in_cg:
+            return self._volume.group_id
+        return None
+
+    @property
+    def is_replication_enabled(self):
+        if self._is_replication_enabled is None:
+            value = utils.get_extra_spec(self._volume, 'replication_enabled')
+            self._is_replication_enabled = value == '<is> True'
+        return self._is_replication_enabled
+
     def __eq__(self, other):
-        return (self.volume_id == other.volume_id
-                and self.name == other.name
-                and self.size == other.size
-                and self.io_limit_policy == other.io_limit_policy)
+        return (self.volume_id == other.volume_id and
+                self.name == other.name and
+                self.size == other.size and
+                self.io_limit_policy == other.io_limit_policy and
+                self.is_thick == other.is_thick and
+                self.is_compressed == other.is_compressed and
+                self.is_in_cg == other.is_in_cg and
+                self.cg_id == other.cg_id and
+                self.is_replication_enabled == other.is_replication_enabled)
 
 
 class CommonAdapter(object):
@@ -121,6 +175,7 @@ class CommonAdapter(object):
     driver_volume_type = 'unknown'
 
     def __init__(self, version=None):
+        self.is_setup = False
         self.version = version
         self.driver = None
         self.config = None
@@ -138,23 +193,30 @@ class CommonAdapter(object):
         self.storage_pools_map = None
         self._client = None
         self.allowed_ports = None
-        self.force_delete_attached_snapshots = False
+        self.remove_empty_host = False
+        self.to_lock_host = False
+        self.replication_manager = None
 
     def do_setup(self, driver, conf):
+        """Sets up the attributes of adapter.
+
+        :param driver: the unity driver.
+        :param conf: the driver configurations.
+        """
         self.driver = driver
         self.config = self.normalize_config(conf)
+        self.replication_manager = driver.replication_manager
         self.configured_pool_names = self.config.unity_storage_pool_names
         self.reserved_percentage = self.config.reserved_percentage
         self.max_over_subscription_ratio = (
             self.config.max_over_subscription_ratio)
-        self.volume_backend_name = (
-            self.config.safe_get('volume_backend_name') or self.driver_name)
+        self.volume_backend_name = (self.config.safe_get('volume_backend_name')
+                                    or self.driver_name)
         self.ip = self.config.san_ip
         self.username = self.config.san_login
         self.password = self.config.san_password
-        # Unity currently not support to upload certificate.
-        # Once it supports, enable the verify.
-        self.array_cert_verify = False
+        # Allow for customized CA
+        self.array_cert_verify = self.config.driver_ssl_cert_verify
         self.array_ca_cert_path = self.config.driver_ssl_cert_path
 
         sys_version = self.client.system.system_version
@@ -167,8 +229,8 @@ class CommonAdapter(object):
 
         self.allowed_ports = self.validate_ports(self.config.unity_io_ports)
 
-        self.force_delete_attached_snapshots = (
-            self.config.force_delete_attached_snapshots)
+        self.remove_empty_host = self.config.remove_empty_host
+        self.to_lock_host = self.remove_empty_host
 
         group_name = (self.config.config_group if self.config.config_group
                       else 'DEFAULT')
@@ -176,6 +238,8 @@ class CommonAdapter(object):
             'group': group_name, 'sys_name': self.client.system.info.name}
         persist_path = os.path.join(cfg.CONF.state_path, 'unity', folder_name)
         storops.TCHelper.set_up(persist_path)
+
+        self.is_setup = True
 
     def normalize_config(self, config):
         config.unity_storage_pool_names = utils.remove_empty(
@@ -205,21 +269,21 @@ class CommonAdapter(object):
         matched, _ignored, unmatched_whitelist = utils.match_any(all_ports.id,
                                                                  whitelist)
         if not matched:
-            LOG.error(_LE('No matched ports filtered by all patterns: %s'),
+            LOG.error('No matched ports filtered by all patterns: %s',
                       whitelist)
             raise exception.InvalidConfigurationValue(
                 option='%s.unity_io_ports' % self.config.config_group,
                 value=self.config.unity_io_ports)
 
         if unmatched_whitelist:
-            LOG.error(_LE('No matched ports filtered by below patterns: %s'),
+            LOG.error('No matched ports filtered by below patterns: %s',
                       unmatched_whitelist)
             raise exception.InvalidConfigurationValue(
                 option='%s.unity_io_ports' % self.config.config_group,
                 value=self.config.unity_io_ports)
 
-        LOG.info(_LI('These ports %(matched)s will be used based on '
-                     'the option unity_io_ports: %(config)s'),
+        LOG.info('These ports %(matched)s will be used based on '
+                 'the option unity_io_ports: %(config)s',
                  {'matched': matched,
                   'config': self.config.unity_io_ports})
         return matched
@@ -253,14 +317,38 @@ class CommonAdapter(object):
         valid_names = utils.validate_pool_names(names, array_pools.name)
         return {p.name: p for p in array_pools if p.name in valid_names}
 
-    def makeup_model(self, lun, is_snap_lun=False):
+    def makeup_model(self, lun_id, is_snap_lun=False):
         lun_type = 'snap_lun' if is_snap_lun else 'lun'
-        location = self._build_provider_location(lun_id=lun.get_id(),
+        location = self._build_provider_location(lun_id=lun_id,
                                                  lun_type=lun_type)
         return {
             'provider_location': location,
-            'provider_id': lun.get_id()
+            'provider_id': lun_id
         }
+
+    def setup_replications(self, lun, model_update):
+        if not self.replication_manager.is_replication_configured:
+            LOG.debug('Replication device not configured, '
+                      'skip setting up replication for lun %s',
+                      lun.name)
+            return model_update
+
+        rep_data = {}
+        rep_devices = self.replication_manager.replication_devices
+        for backend_id, dst in rep_devices.items():
+            remote_serial_number = dst.adapter.serial_number
+            LOG.debug('Setting up replication to remote system %s',
+                      remote_serial_number)
+            remote_system = self.client.get_remote_system(remote_serial_number)
+            if remote_system is None:
+                raise exception.VolumeBackendAPIException(
+                    data=_('Setup replication to remote system %s failed.'
+                           'Cannot find it.') % remote_serial_number)
+            rep_session = self.client.create_replication(
+                lun, dst.max_time_out_of_sync,
+                dst.destination_pool.get_id(), remote_system)
+            rep_data[backend_id] = rep_session.name
+        return utils.enable_replication_status(model_update, rep_data)
 
     def create_volume(self, volume):
         """Creates a volume.
@@ -273,34 +361,68 @@ class CommonAdapter(object):
             'size': params.size,
             'description': params.description,
             'pool': params.pool,
-            'io_limit_policy': params.io_limit_policy}
+            'io_limit_policy': params.io_limit_policy,
+            'is_thick': params.is_thick,
+            'is_compressed': params.is_compressed,
+            'cg_id': params.cg_id,
+            'is_replication_enabled': params.is_replication_enabled
+        }
 
-        LOG.info(_LI('Create Volume: %(name)s, size: %(size)s, description: '
-                     '%(description)s, pool: %(pool)s, io limit policy: '
-                     '%(io_limit_policy)s.'), log_params)
+        LOG.info('Create Volume: %(name)s, size: %(size)s, description: '
+                 '%(description)s, pool: %(pool)s, io limit policy: '
+                 '%(io_limit_policy)s, thick: %(is_thick)s, '
+                 'compressed: %(is_compressed)s, cg_group: %(cg_id)s, '
+                 'replication_enabled: %(is_replication_enabled)s.',
+                 log_params)
 
-        return self.makeup_model(
-            self.client.create_lun(name=params.name,
-                                   size=params.size,
-                                   pool=params.pool,
-                                   description=params.description,
-                                   io_limit_policy=params.io_limit_policy))
+        lun = self.client.create_lun(
+            name=params.name,
+            size=params.size,
+            pool=params.pool,
+            description=params.description,
+            io_limit_policy=params.io_limit_policy,
+            is_thin=False if params.is_thick else None,
+            is_compressed=params.is_compressed)
+
+        if params.cg_id:
+            LOG.debug('Adding lun %(lun)s to cg %(cg)s.',
+                      {'lun': lun.get_id(), 'cg': params.cg_id})
+            self.client.update_cg(params.cg_id, [lun.get_id()], ())
+
+        model_update = self.makeup_model(lun.get_id())
+
+        if params.is_replication_enabled:
+            model_update = self.setup_replications(lun, model_update)
+        return model_update
 
     def delete_volume(self, volume):
         lun_id = self.get_lun_id(volume)
         if lun_id is None:
-            LOG.info(_LI('Backend LUN not found, skipping the deletion. '
-                         'Volume: %(volume_name)s.'),
+            LOG.info('Backend LUN not found, skipping the deletion. '
+                     'Volume: %(volume_name)s.',
                      {'volume_name': volume.name})
         else:
             self.client.delete_lun(lun_id)
 
-    @cinder_utils.trace
+    def _create_host_and_attach(self, host_name, lun_or_snap):
+        @utils.lock_if(self.to_lock_host, '{lock_name}')
+        def _lock_helper(lock_name):
+            if not self.to_lock_host:
+                host = self.client.create_host(host_name)
+            else:
+                # Use the lock in the decorator
+                host = self.client.create_host_wo_lock(host_name)
+            hlu = self.client.attach(host, lun_or_snap)
+            return host, hlu
+
+        return _lock_helper('{unity}-{host}'.format(unity=self.client.host,
+                                                    host=host_name))
+
     def _initialize_connection(self, lun_or_snap, connector, vol_id):
-        host = self.client.create_host(connector['host'])
+        host, hlu = self._create_host_and_attach(connector['host'],
+                                                 lun_or_snap)
         self.client.update_host_initiators(
             host, self.get_connector_uids(connector))
-        hlu = self.client.attach(host, lun_or_snap)
         data = self.get_connection_info(hlu, host, connector)
         data['target_discovered'] = True
         if vol_id is not None:
@@ -309,7 +431,6 @@ class CommonAdapter(object):
             'driver_volume_type': self.driver_volume_type,
             'data': data,
         }
-        LOG.debug('Initialized connection info: %s', conn_info)
         return conn_info
 
     @cinder_utils.trace
@@ -317,15 +438,60 @@ class CommonAdapter(object):
         lun = self.client.get_lun(lun_id=self.get_lun_id(volume))
         return self._initialize_connection(lun, connector, volume.id)
 
-    @cinder_utils.trace
-    def _terminate_connection(self, lun_or_snap, connector):
-        host = self.client.create_host(connector['host'])
-        self.client.detach(host, lun_or_snap)
+    @staticmethod
+    def filter_targets_by_host(host):
+        # No target info for iSCSI driver
+        return []
+
+    def _detach_and_delete_host(self, host_name, lun_or_snap,
+                                is_multiattach_to_host=False):
+        @utils.lock_if(self.to_lock_host, '{lock_name}')
+        def _lock_helper(lock_name):
+            # Only get the host from cache here
+            host = self.client.create_host_wo_lock(host_name)
+            if not is_multiattach_to_host:
+                self.client.detach(host, lun_or_snap)
+            host.update()  # need update to get the latest `host_luns`
+            targets = self.filter_targets_by_host(host)
+            if self.remove_empty_host and not host.host_luns:
+                self.client.delete_host_wo_lock(host)
+            return targets
+
+        return _lock_helper('{unity}-{host}'.format(unity=self.client.host,
+                                                    host=host_name))
+
+    @staticmethod
+    def get_terminate_connection_info(connector, targets):
+        # No return data from terminate_connection for iSCSI driver
+        return {}
+
+    def _terminate_connection(self, lun_or_snap, connector,
+                              is_multiattach_to_host=False):
+        is_force_detach = connector is None
+        data = {}
+        if is_force_detach:
+            self.client.detach_all(lun_or_snap)
+        else:
+            targets = self._detach_and_delete_host(
+                connector['host'], lun_or_snap,
+                is_multiattach_to_host=is_multiattach_to_host)
+            data = self.get_terminate_connection_info(connector, targets)
+        return {
+            'driver_volume_type': self.driver_volume_type,
+            'data': data,
+        }
 
     @cinder_utils.trace
     def terminate_connection(self, volume, connector):
         lun = self.client.get_lun(lun_id=self.get_lun_id(volume))
-        return self._terminate_connection(lun, connector)
+        # None `connector` indicates force detach, then detach all even the
+        # volume is multi-attached.
+        multiattach_flag = (connector is not None and
+                            utils.is_multiattach_to_host(
+                                volume.volume_attachment,
+                                connector['host']))
+        return self._terminate_connection(
+            lun, connector, is_multiattach_to_host=multiattach_flag)
 
     def get_connector_uids(self, connector):
         return None
@@ -352,13 +518,16 @@ class CommonAdapter(object):
             lun_id=lun_id,
             version=self.version)
 
+    @utils.append_capabilities
     def update_volume_stats(self):
         return {
             'volume_backend_name': self.volume_backend_name,
             'storage_protocol': self.protocol,
-            'thin_provisioning_support': True,
-            'thick_provisioning_support': False,
             'pools': self.get_pools_stats(),
+            'replication_enabled':
+                self.replication_manager.is_replication_configured,
+            'replication_targets':
+                list(self.replication_manager.replication_devices),
         }
 
     def get_pools_stats(self):
@@ -369,6 +538,7 @@ class CommonAdapter(object):
     def pools(self):
         return self.storage_pools_map.values()
 
+    @utils.append_capabilities
     def _get_pool_stats(self, pool):
         return {
             'pool_name': pool.name,
@@ -380,10 +550,15 @@ class CommonAdapter(object):
             'location_info': ('%(pool_name)s|%(array_serial)s' %
                               {'pool_name': pool.name,
                                'array_serial': self.serial_number}),
-            'thin_provisioning_support': True,
-            'thick_provisioning_support': False,
+            'compression_support': pool.is_all_flash,
             'max_over_subscription_ratio': (
-                self.max_over_subscription_ratio)}
+                self.max_over_subscription_ratio),
+            'multiattach': True,
+            'replication_enabled':
+                self.replication_manager.is_replication_configured,
+            'replication_targets':
+                list(self.replication_manager.replication_devices),
+        }
 
     def get_lun_id(self, volume):
         """Retrieves id of the volume's backing LUN.
@@ -418,8 +593,7 @@ class CommonAdapter(object):
         :param snapshot: the snapshot to delete.
         """
         snap = self.client.get_snap(name=snapshot.name)
-        self.client.delete_snap(
-            snap, even_attached=self.force_delete_attached_snapshots)
+        self.client.delete_snap(snap)
 
     def _get_referenced_lun(self, existing_ref):
         if 'source-id' in existing_ref:
@@ -449,7 +623,9 @@ class CommonAdapter(object):
         .. code-block:: none
 
         existing_ref:{
+
             'source-id':<LUN id in Unity>
+
         }
 
         or
@@ -457,7 +633,9 @@ class CommonAdapter(object):
         .. code-block:: none
 
         existing_ref:{
+
             'source-name':<LUN name in Unity>
+
         }
         """
         lun = self._get_referenced_lun(existing_ref)
@@ -503,13 +681,13 @@ class CommonAdapter(object):
         :param connector: the host connector information.
         :param res_id: the ID of the LUN or snapshot.
 
-        :return the connection information, in a dict with format like (same as
-        the one returned by `_connect_device`):
-        {
+        :return: the connection information, in a dict with format
+         like (same as the one returned by `_connect_device`):
+         {
             'conn': <info returned by `initialize_connection`>,
             'device': <value returned by `connect_volume`>,
             'connector': <host connector info>
-        }
+         }
         """
         init_conn_func = functools.partial(self._initialize_connection,
                                            lun_or_snap, connector, res_id)
@@ -533,7 +711,9 @@ class CommonAdapter(object):
         dest_lun = self.client.create_lun(
             name=vol_params.name, size=vol_params.size, pool=vol_params.pool,
             description=vol_params.description,
-            io_limit_policy=vol_params.io_limit_policy)
+            io_limit_policy=vol_params.io_limit_policy,
+            is_thin=False if vol_params.is_thick else None,
+            is_compressed=vol_params.is_compressed)
         src_id = src_snap.get_id()
         try:
             conn_props = cinder_utils.brick_get_connector_properties()
@@ -545,12 +725,10 @@ class CommonAdapter(object):
                 if src_lun is None:
                     # If size is not specified, need to get the size from LUN
                     # of snapshot.
-                    lun = self.client.get_lun(
-                        lun_id=src_snap.storage_resource.get_id())
-                    size_in_m = utils.byte_to_mib(lun.size_total)
+                    size_in_m = utils.byte_to_mib(src_snap.size)
                 else:
                     size_in_m = utils.byte_to_mib(src_lun.size_total)
-                vol_utils.copy_volume(
+                volume_utils.copy_volume(
                     src_info['device']['path'],
                     dest_info['device']['path'],
                     size_in_m,
@@ -560,8 +738,8 @@ class CommonAdapter(object):
             with excutils.save_and_reraise_exception():
                 utils.ignore_exception(self.client.delete_lun,
                                        dest_lun.get_id())
-                LOG.error(_LE('Failed to create cloned volume: %(vol_id)s, '
-                              'from source unity snapshot: %(snap_name)s.'),
+                LOG.error('Failed to create cloned volume: %(vol_id)s, '
+                          'from source unity snapshot: %(snap_name)s.',
                           {'vol_id': vol_params.volume_id,
                            'snap_name': src_snap.name})
 
@@ -577,8 +755,8 @@ class CommonAdapter(object):
                 io_limit_policy=vol_params.io_limit_policy,
                 new_size_gb=vol_params.size)
         except storops_ex.UnityThinCloneLimitExceededError:
-            LOG.info(_LI('Number of thin clones of base LUN exceeds system '
-                         'limit, dd-copy a new one and thin clone from it.'))
+            LOG.info('Number of thin clones of base LUN exceeds system '
+                     'limit, dd-copy a new one and thin clone from it.')
             # Copy via dd if thin clone meets the system limit
             hidden = copy.copy(vol_params)
             hidden.name = 'hidden-%s' % vol_params.name
@@ -603,13 +781,27 @@ class CommonAdapter(object):
                 'thin clone api. source snap: %(src_snap)s, lun: %(src_lun)s.',
                 {'src_snap': src_snap.name,
                  'src_lun': 'Unknown' if src_lun is None else src_lun.name})
+        except storops_ex.UnityThinCloneNotAllowedError:
+            # Thin clone not allowed on some resources,
+            # like thick luns and their snaps
+            lun = self._dd_copy(vol_params, src_snap, src_lun=src_lun)
+            LOG.debug(
+                'Volume copied via dd because source snap/lun is not allowed '
+                'to thin clone, i.e. it is thick. source snap: %(src_snap)s, '
+                'lun: %(src_lun)s.',
+                {'src_snap': src_snap.name,
+                 'src_lun': 'Unknown' if src_lun is None else src_lun.name})
         return lun
 
     def create_volume_from_snapshot(self, volume, snapshot):
         snap = self.client.get_snap(snapshot.name)
-        return self.makeup_model(
-            self._thin_clone(VolumeParams(self, volume), snap),
-            is_snap_lun=True)
+        params = VolumeParams(self, volume)
+        lun = self._thin_clone(params, snap)
+        model_update = self.makeup_model(lun.get_id(), is_snap_lun=True)
+
+        if params.is_replication_enabled:
+            model_update = self.setup_replications(lun, model_update)
+        return model_update
 
     def create_cloned_volume(self, volume, src_vref):
         """Creates cloned volume.
@@ -647,13 +839,21 @@ class CommonAdapter(object):
                           '%(name)s is attached: %(attach)s.',
                           {'name': src_vref.name,
                            'attach': src_vref.volume_attachment})
-                return self.makeup_model(lun)
+                model_update = self.makeup_model(lun.get_id())
             else:
                 lun = self._thin_clone(vol_params, src_snap, src_lun=src_lun)
-                return self.makeup_model(lun, is_snap_lun=True)
+                model_update = self.makeup_model(lun.get_id(),
+                                                 is_snap_lun=True)
+
+            if vol_params.is_replication_enabled:
+                model_update = self.setup_replications(lun, model_update)
+            return model_update
 
     def get_pool_name(self, volume):
         return self.client.get_pool_name(volume.name)
+
+    def get_pool_id_by_name(self, name):
+        return self.client.get_pool_id_by_name(name=name)
 
     @cinder_utils.trace
     def initialize_connection_snapshot(self, snapshot, connector):
@@ -664,6 +864,202 @@ class CommonAdapter(object):
     def terminate_connection_snapshot(self, snapshot, connector):
         snap = self.client.get_snap(snapshot.name)
         return self._terminate_connection(snap, connector)
+
+    @cinder_utils.trace
+    def restore_snapshot(self, volume, snapshot):
+        return self.client.restore_snapshot(snapshot.name)
+
+    def migrate_volume(self, volume, host):
+        """Leverage the Unity move session functionality.
+
+        This method is invoked at the source backend.
+        """
+        log_params = {
+            'name': volume.name,
+            'src_host': volume.host,
+            'dest_host': host['host']
+        }
+        LOG.info('Migrate Volume: %(name)s, host: %(src_host)s, destination: '
+                 '%(dest_host)s', log_params)
+
+        src_backend = utils.get_backend_name_from_volume(volume)
+        dest_backend = utils.get_backend_name_from_host(host)
+
+        if src_backend != dest_backend:
+            LOG.debug('Cross-backends migration not supported by Unity '
+                      'driver. Falling back to host-assisted migration.')
+            return False, None
+
+        lun_id = self.get_lun_id(volume)
+        dest_pool_name = utils.get_pool_name_from_host(host)
+        dest_pool_id = self.get_pool_id_by_name(dest_pool_name)
+
+        if self.client.migrate_lun(lun_id, dest_pool_id):
+            LOG.debug('Volume migrated successfully.')
+            model_update = {}
+            return True, model_update
+
+        LOG.debug('Volume migrated failed. Falling back to '
+                  'host-assisted migration.')
+        return False, None
+
+    def create_group(self, group):
+        """Creates a generic group.
+
+        :param group: group information
+        """
+        cg_name = group.id
+        description = group.description if group.description else group.name
+
+        LOG.info('Create group: %(name)s, description: %(description)s',
+                 {'name': cg_name, 'description': description})
+
+        self.client.create_cg(cg_name, description=description)
+        return {'status': fields.GroupStatus.AVAILABLE}
+
+    def delete_group(self, group):
+        """Deletes the generic group.
+
+        :param group: the group to delete
+        """
+
+        # Deleting cg will also delete all the luns in it.
+        self.client.delete_cg(group.id)
+        return None, None
+
+    def update_group(self, group, add_volumes, remove_volumes):
+        add_lun_ids = (set(map(self.get_lun_id, add_volumes)) if add_volumes
+                       else set())
+        remove_lun_ids = (set(map(self.get_lun_id, remove_volumes))
+                          if remove_volumes else set())
+        self.client.update_cg(group.id, add_lun_ids, remove_lun_ids)
+        return {'status': fields.GroupStatus.AVAILABLE}, None, None
+
+    def copy_luns_in_group(self, group, volumes, src_cg_snap, src_volumes):
+        # Use dd to copy data here. The reason why not using thinclone is:
+        # 1. Cannot use cg thinclone due to the tight couple between source
+        # group and cloned one.
+        # 2. Cannot use lun thinclone due to clone lun in cg is not supported.
+
+        lun_snaps = self.client.filter_snaps_in_cg_snap(src_cg_snap.id)
+
+        # Make sure the `lun_snaps` is as order of `src_volumes`
+        src_lun_ids = [self.get_lun_id(volume) for volume in src_volumes]
+        lun_snaps.sort(key=lambda snap: src_lun_ids.index(snap.lun.id))
+
+        dest_luns = [self._dd_copy(VolumeParams(self, dest_volume), lun_snap)
+                     for dest_volume, lun_snap in zip(volumes, lun_snaps)]
+
+        self.client.create_cg(group.id, lun_add=dest_luns)
+        return ({'status': fields.GroupStatus.AVAILABLE},
+                [{'id': dest_volume.id, 'status': fields.GroupStatus.AVAILABLE}
+                 for dest_volume in volumes])
+
+    def create_group_from_snap(self, group, volumes,
+                               group_snapshot, snapshots):
+        src_cg_snap = self.client.get_snap(group_snapshot.id)
+        src_vols = ([snap.volume for snap in snapshots] if snapshots else [])
+        return self.copy_luns_in_group(group, volumes, src_cg_snap, src_vols)
+
+    def create_cloned_group(self, group, volumes, source_group, source_vols):
+        src_group_snap_name = 'snap_clone_group_{}'.format(source_group.id)
+        create_snap_func = functools.partial(self.client.create_cg_snap,
+                                             source_group.id,
+                                             src_group_snap_name)
+        with utils.assure_cleanup(create_snap_func,
+                                  self.client.delete_snap,
+                                  True) as src_cg_snap:
+            LOG.debug('Internal group snapshot for clone is created, '
+                      'name: %(name)s, id: %(id)s.',
+                      {'name': src_group_snap_name,
+                       'id': src_cg_snap.get_id()})
+            source_vols = source_vols if source_vols else []
+            return self.copy_luns_in_group(group, volumes, src_cg_snap,
+                                           source_vols)
+
+    def create_group_snapshot(self, group_snapshot, snapshots):
+        self.client.create_cg_snap(group_snapshot.group_id,
+                                   snap_name=group_snapshot.id)
+
+        model_update = {'status': fields.GroupStatus.AVAILABLE}
+        snapshots_model_update = [{'id': snapshot.id,
+                                   'status': fields.SnapshotStatus.AVAILABLE}
+                                  for snapshot in snapshots]
+        return model_update, snapshots_model_update
+
+    def delete_group_snapshot(self, group_snapshot):
+        cg_snap = self.client.get_snap(group_snapshot.id)
+        self.client.delete_snap(cg_snap)
+        return None, None
+
+    @cinder_utils.trace
+    def failover(self, volumes, secondary_id=None, groups=None):
+        # TODO(ryan) support group failover after group bp merges
+        # https://review.openstack.org/#/c/574119/
+
+        if secondary_id is None:
+            LOG.debug('No secondary specified when failover. '
+                      'Randomly choose a secondary')
+            secondary_id = random.choice(
+                list(self.replication_manager.replication_devices))
+            LOG.debug('Chose %s as secondary', secondary_id)
+
+        is_failback = secondary_id == 'default'
+
+        def _failover_or_back(volume):
+            LOG.debug('Failing over volume: %(vol)s to secondary id: '
+                      '%(sec_id)s', vol=volume.name, sec_id=secondary_id)
+            model_update = {
+                'volume_id': volume.id,
+                'updates': {}
+            }
+
+            if not volume.replication_driver_data:
+                LOG.error('Empty replication_driver_data of volume: %s, '
+                          'replication session name should be in it.',
+                          volume.name)
+                return utils.error_replication_status(model_update)
+            rep_data = utils.load_replication_data(
+                volume.replication_driver_data)
+
+            if is_failback:
+                # Failback executed on secondary backend which is currently
+                # active.
+                _adapter = self.replication_manager.default_device.adapter
+                _client = self.replication_manager.active_adapter.client
+                rep_name = rep_data[self.replication_manager.active_backend_id]
+            else:
+                # Failover executed on secondary backend because primary could
+                # die.
+                _adapter = self.replication_manager.replication_devices[
+                    secondary_id].adapter
+                _client = _adapter.client
+                rep_name = rep_data[secondary_id]
+
+            try:
+                rep_session = _client.get_replication_session(name=rep_name)
+
+                if is_failback:
+                    _client.failback_replication(rep_session)
+                    new_model = _adapter.makeup_model(
+                        rep_session.src_resource_id)
+                else:
+                    _client.failover_replication(rep_session)
+                    new_model = _adapter.makeup_model(
+                        rep_session.dst_resource_id)
+
+                model_update['updates'].update(new_model)
+                self.replication_manager.failover_service(secondary_id)
+                return model_update
+            except client.ClientReplicationError as ex:
+                LOG.error('Failover failed, volume: %(vol)s, secondary id: '
+                          '%(sec_id)s, error: %(err)s',
+                          vol=volume.name, sec_id=secondary_id, err=ex)
+                return utils.error_replication_status(model_update)
+
+        return (secondary_id,
+                [_failover_or_back(volume) for volume in volumes],
+                [])
 
 
 class ISCSIAdapter(CommonAdapter):
@@ -738,25 +1134,19 @@ class FCAdapter(CommonAdapter):
         data['target_lun'] = hlu
         return data
 
-    @cinder_utils.trace
-    def _terminate_connection(self, lun_or_snap, connector):
+    def filter_targets_by_host(self, host):
+        if self.auto_zone_enabled and not host.host_luns:
+            return self.client.get_fc_target_info(
+                host=host, logged_in_only=False,
+                allowed_ports=self.allowed_ports)
+        return []
+
+    def get_terminate_connection_info(self, connector, targets):
         # For FC, terminate_connection needs to return data to zone manager
         # which would clean the zone based on the data.
-        super(FCAdapter, self)._terminate_connection(lun_or_snap, connector)
-
-        ret = None
-        if self.auto_zone_enabled:
-            ret = {
-                'driver_volume_type': self.driver_volume_type,
-                'data': {}
-            }
-            host = self.client.create_host(connector['host'])
-            if len(host.host_luns) == 0:
-                targets = self.client.get_fc_target_info(
-                    logged_in_only=True, allowed_ports=self.allowed_ports)
-                ret['data'] = self._get_fc_zone_info(connector['wwpns'],
-                                                     targets)
-        return ret
+        if targets:
+            return self._get_fc_zone_info(connector['wwpns'], targets)
+        return {}
 
     def _get_fc_zone_info(self, initiator_wwns, target_wwns):
         mapping = self.lookup_service.get_device_mapping_from_network(

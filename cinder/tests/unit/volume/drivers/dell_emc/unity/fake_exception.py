@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -18,35 +18,39 @@ class StoropsException(Exception):
     message = 'Storops Error.'
 
 
-class UnityLunNameInUseError(StoropsException):
+class UnityException(StoropsException):
     pass
 
 
-class UnityResourceNotFoundError(StoropsException):
+class UnityLunNameInUseError(UnityException):
     pass
 
 
-class UnitySnapNameInUseError(StoropsException):
+class UnityResourceNotFoundError(UnityException):
     pass
 
 
-class UnityDeleteAttachedSnapError(StoropsException):
+class UnitySnapNameInUseError(UnityException):
     pass
 
 
-class UnityResourceAlreadyAttachedError(StoropsException):
+class UnityDeleteAttachedSnapError(UnityException):
     pass
 
 
-class UnityPolicyNameInUseError(StoropsException):
+class UnityResourceAlreadyAttachedError(UnityException):
     pass
 
 
-class UnityNothingToModifyError(StoropsException):
+class UnityPolicyNameInUseError(UnityException):
     pass
 
 
-class UnityThinCloneLimitExceededError(StoropsException):
+class UnityNothingToModifyError(UnityException):
+    pass
+
+
+class UnityThinCloneLimitExceededError(UnityException):
     pass
 
 
@@ -55,6 +59,14 @@ class ExtendLunError(Exception):
 
 
 class DetachIsCalled(Exception):
+    pass
+
+
+class DetachAllIsCalled(Exception):
+    pass
+
+
+class DetachFromIsCalled(Exception):
     pass
 
 
@@ -71,4 +83,28 @@ class UnexpectedLunDeletion(Exception):
 
 
 class AdapterSetupError(Exception):
+    pass
+
+
+class ReplicationManagerSetupError(Exception):
+    pass
+
+
+class HostDeleteIsCalled(Exception):
+    pass
+
+
+class UnityThinCloneNotAllowedError(UnityException):
+    pass
+
+
+class SystemAPINotSupported(UnityException):
+    pass
+
+
+class UnityDeleteLunInReplicationError(UnityException):
+    pass
+
+
+class UnityConsistencyGroupNameInUseError(StoropsException):
     pass

@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -14,6 +14,7 @@
 # under the License.
 import unittest
 
+import ddt
 from mock import mock
 from oslo_utils import units
 
@@ -21,6 +22,7 @@ from cinder import coordination
 from cinder.tests.unit.volume.drivers.dell_emc.unity \
     import fake_exception as ex
 from cinder.volume.drivers.dell_emc.unity import client
+
 
 ########################
 #
@@ -48,6 +50,11 @@ class MockResource(object):
         self.pool_name = 'Pool0'
         self._storage_resource = None
         self.host_cache = []
+        self.is_thin = None
+        self.is_all_flash = True
+        self.description = None
+        self.luns = None
+        self.lun = None
 
     @property
     def id(self):
@@ -56,13 +63,20 @@ class MockResource(object):
     def get_id(self):
         return self._id
 
-    def delete(self):
+    def delete(self, force_snap_delete=None):
         if self.get_id() in ['snap_2']:
             raise ex.SnapDeleteIsCalled()
         elif self.get_id() == 'not_found':
             raise ex.UnityResourceNotFoundError()
         elif self.get_id() == 'snap_in_use':
             raise ex.UnityDeleteAttachedSnapError()
+        elif self.name == 'empty-host':
+            raise ex.HostDeleteIsCalled()
+        elif self.get_id() == 'lun_in_replication':
+            if not force_snap_delete:
+                raise ex.UnityDeleteLunInReplicationError()
+        elif self.get_id() == 'lun_rep_session_1':
+            raise ex.UnityResourceNotFoundError()
 
     @property
     def pool(self):
@@ -100,17 +114,25 @@ class MockResource(object):
         if lun_or_snap.name == 'detach_failure':
             raise ex.DetachIsCalled()
 
+    @staticmethod
+    def detach_from(host):
+        if host is None:
+            raise ex.DetachFromIsCalled()
+
     def get_hlu(self, lun):
         return self.alu_hlu_map.get(lun.get_id(), None)
 
     @staticmethod
-    def create_lun(lun_name, size_gb, description=None, io_limit_policy=None):
+    def create_lun(lun_name, size_gb, description=None, io_limit_policy=None,
+                   is_thin=None, is_compression=None):
         if lun_name == 'in_use':
             raise ex.UnityLunNameInUseError()
         ret = MockResource(lun_name, 'lun_2')
         if io_limit_policy is not None:
             ret.max_iops = io_limit_policy.max_iops
             ret.max_kbps = io_limit_policy.max_kbps
+        if is_thin is not None:
+            ret.is_thin = is_thin
         return ret
 
     @staticmethod
@@ -156,6 +178,8 @@ class MockResource(object):
 
     @property
     def host_luns(self):
+        if self.name == 'host-no-host_luns':
+            return None
         return []
 
     @property
@@ -177,6 +201,32 @@ class MockResource(object):
             raise ex.UnityLunNameInUseError
         return MockResource(_id=name, name=name)
 
+    def get_snap(self, name):
+        return MockResource(_id=name, name=name)
+
+    def restore(self, delete_backup):
+        return MockResource(_id='snap_1', name="internal_snap")
+
+    def migrate(self, dest_pool):
+        if dest_pool.id == 'pool_2':
+            return False
+        return True
+
+    def replicate_with_dst_resource_provisioning(self, max_time_out_of_sync,
+                                                 dst_pool_id,
+                                                 remote_system=None,
+                                                 dst_lun_name=None):
+        return {'max_time_out_of_sync': max_time_out_of_sync,
+                'dst_pool_id': dst_pool_id,
+                'remote_system': remote_system,
+                'dst_lun_name': dst_lun_name}
+
+    def failover(self, sync=None):
+        return {'sync': sync}
+
+    def failback(self, force_full_copy=None):
+        return {'force_full_copy': force_full_copy}
+
 
 class MockResourceList(object):
     def __init__(self, names=None, ids=None):
@@ -194,6 +244,14 @@ class MockResourceList(object):
     @property
     def name(self):
         return map(lambda i: i.name, self.resources)
+
+    @property
+    def list(self):
+        return self.resources
+
+    @list.setter
+    def list(self, value):
+        self.resources = []
 
     def __iter__(self):
         return self.resources.__iter__()
@@ -233,7 +291,11 @@ class MockSystem(object):
         return MockResource(name, _id)
 
     @staticmethod
-    def get_pool():
+    def get_pool(_id=None, name=None):
+        if name == 'Pool 3':
+            return MockResource(name, 'pool_3')
+        if name or _id:
+            return MockResource(name, _id)
         return MockResourceList(['Pool 1', 'Pool 2'])
 
     @staticmethod
@@ -285,6 +347,28 @@ class MockSystem(object):
     def get_io_limit_policy(name):
         return MockResource(name=name)
 
+    def get_remote_system(self, name=None):
+        if name == 'not-exist':
+            raise ex.UnityResourceNotFoundError()
+        else:
+            return {'name': name}
+
+    def get_replication_session(self, name=None,
+                                src_resource_id=None, dst_resource_id=None):
+        if name == 'not-exist':
+            raise ex.UnityResourceNotFoundError()
+        elif src_resource_id == 'lun_in_replication':
+            return [MockResource(name='rep_session')]
+        elif src_resource_id == 'lun_not_in_replication':
+            raise ex.UnityResourceNotFoundError()
+        elif src_resource_id == 'lun_in_multiple_replications':
+            return [MockResource(_id='lun_rep_session_1'),
+                    MockResource(_id='lun_rep_session_2')]
+        else:
+            return {'name': name,
+                    'src_resource_id': src_resource_id,
+                    'dst_resource_id': dst_resource_id}
+
 
 @mock.patch.object(client, 'storops', new='True')
 def get_client():
@@ -298,6 +382,7 @@ def get_client():
 #   Start of Tests
 #
 ########################
+@ddt.ddt
 @mock.patch.object(client, 'storops_ex', new=ex)
 class ClientTest(unittest.TestCase):
     def setUp(self):
@@ -324,6 +409,13 @@ class ClientTest(unittest.TestCase):
         limit.max_kbps = 100
         lun = self.client.create_lun('LUN 4', 6, pool, io_limit_policy=limit)
         self.assertEqual(100, lun.max_kbps)
+
+    def test_create_lun_thick(self):
+        name = 'thick_lun'
+        pool = MockResource('Pool 0')
+        lun = self.client.create_lun(name, 6, pool, is_thin=False)
+        self.assertIsNotNone(lun.is_thin)
+        self.assertFalse(lun.is_thin)
 
     def test_thin_clone_success(self):
         name = 'tc_77'
@@ -353,6 +445,15 @@ class ClientTest(unittest.TestCase):
             self.client.delete_lun('not_found')
         except ex.StoropsException:
             self.fail('not found error should be dealt with silently.')
+
+    def test_delete_lun_in_replication(self):
+        self.client.delete_lun('lun_in_replication')
+
+    @ddt.data({'lun_id': 'lun_not_in_replication'},
+              {'lun_id': 'lun_in_multiple_replications'})
+    @ddt.unpack
+    def test_delete_lun_replications(self, lun_id):
+        self.client.delete_lun_replications(lun_id)
 
     def test_get_lun_with_id(self):
         lun = self.client.get_lun('lun4')
@@ -446,6 +547,13 @@ class ClientTest(unittest.TestCase):
 
         self.assertRaises(ex.DetachIsCalled, f)
 
+    def test_detach_all(self):
+        def f():
+            lun = MockResource('lun_44')
+            self.client.detach_all(lun)
+
+        self.assertRaises(ex.DetachFromIsCalled, f)
+
     @mock.patch.object(coordination.Coordinator, 'get_lock')
     def test_create_host(self, fake):
         self.assertEqual('host2', self.client.create_host('host2').name)
@@ -519,5 +627,234 @@ class ClientTest(unittest.TestCase):
         lun = self.client.extend_lun('ev_4', 5)
         self.assertEqual(5, lun.total_size_gb)
 
+    def test_migrate_lun_success(self):
+        ret = self.client.migrate_lun('lun_0', 'pool_1')
+        self.assertTrue(ret)
+
+    def test_migrate_lun_failed(self):
+        ret = self.client.migrate_lun('lun_0', 'pool_2')
+        self.assertFalse(ret)
+
+    def test_get_pool_id_by_name(self):
+        self.assertEqual('pool_3', self.client.get_pool_id_by_name('Pool 3'))
+
     def test_get_pool_name(self):
         self.assertEqual('Pool0', self.client.get_pool_name('lun_0'))
+
+    def test_restore_snapshot(self):
+        back_snap = self.client.restore_snapshot('snap1')
+        self.assertEqual("internal_snap", back_snap.name)
+
+    def test_delete_host_wo_lock(self):
+        host = MockResource(name='empty-host')
+        self.client.host_cache['empty-host'] = host
+        self.assertRaises(ex.HostDeleteIsCalled,
+                          self.client.delete_host_wo_lock,
+                          host)
+
+    def test_delete_host_wo_lock_remove_from_cache(self):
+        host = MockResource(name='empty-host-in-cache')
+        self.client.host_cache['empty-host-in-cache'] = host
+        self.client.delete_host_wo_lock(host)
+        self.assertNotIn(host.name, self.client.host_cache)
+
+    @ddt.data(('cg_1', 'cg_1_description', [MockResource(_id='sv_1')]),
+              ('cg_2', None, None),
+              ('cg_3', None, [MockResource(_id='sv_2')]),
+              ('cg_4', 'cg_4_description', None))
+    @ddt.unpack
+    def test_create_cg(self, cg_name, cg_description, lun_add):
+        created_cg = MockResource(_id='cg_1')
+        with mock.patch.object(self.client.system, 'create_cg',
+                               create=True, return_value=created_cg
+                               ) as mocked_create:
+            ret = self.client.create_cg(cg_name, description=cg_description,
+                                        lun_add=lun_add)
+            mocked_create.assert_called_once_with(cg_name,
+                                                  description=cg_description,
+                                                  lun_add=lun_add)
+            self.assertEqual(created_cg, ret)
+
+    def test_create_cg_existing_name(self):
+        existing_cg = MockResource(_id='cg_1')
+        with mock.patch.object(
+                self.client.system, 'create_cg',
+                side_effect=ex.UnityConsistencyGroupNameInUseError,
+                create=True) as mocked_create, \
+                mock.patch.object(self.client.system, 'get_cg',
+                                  create=True,
+                                  return_value=existing_cg) as mocked_get:
+            ret = self.client.create_cg('existing_name')
+            mocked_create.assert_called_once_with('existing_name',
+                                                  description=None,
+                                                  lun_add=None)
+            mocked_get.assert_called_once_with(name='existing_name')
+            self.assertEqual(existing_cg, ret)
+
+    def test_get_cg(self):
+        existing_cg = MockResource(_id='cg_1')
+        with mock.patch.object(self.client.system, 'get_cg',
+                               create=True,
+                               return_value=existing_cg) as mocked_get:
+            ret = self.client.get_cg('existing_name')
+            mocked_get.assert_called_once_with(name='existing_name')
+            self.assertEqual(existing_cg, ret)
+
+    def test_get_cg_not_found(self):
+        with mock.patch.object(self.client.system, 'get_cg',
+                               create=True,
+                               side_effect=ex.UnityResourceNotFoundError
+                               ) as mocked_get:
+            ret = self.client.get_cg('not_found_name')
+            mocked_get.assert_called_once_with(name='not_found_name')
+            self.assertIsNone(ret)
+
+    def test_delete_cg(self):
+        existing_cg = MockResource(_id='cg_1')
+        with mock.patch.object(existing_cg, 'delete', create=True
+                               ) as mocked_delete, \
+                mock.patch.object(self.client, 'get_cg',
+                                  create=True,
+                                  return_value=existing_cg) as mocked_get:
+            ret = self.client.delete_cg('cg_1_name')
+            mocked_get.assert_called_once_with('cg_1_name')
+            mocked_delete.assert_called_once()
+            self.assertIsNone(ret)
+
+    def test_update_cg(self):
+        existing_cg = MockResource(_id='cg_1')
+        lun_1 = MockResource(_id='sv_1')
+        lun_2 = MockResource(_id='sv_2')
+        lun_3 = MockResource(_id='sv_3')
+
+        def _mocked_get_lun(lun_id):
+            if lun_id == 'sv_1':
+                return lun_1
+            if lun_id == 'sv_2':
+                return lun_2
+            if lun_id == 'sv_3':
+                return lun_3
+
+        with mock.patch.object(existing_cg, 'update_lun', create=True
+                               ) as mocked_update, \
+                mock.patch.object(self.client, 'get_cg',
+                                  create=True,
+                                  return_value=existing_cg) as mocked_get, \
+                mock.patch.object(self.client, 'get_lun',
+                                  side_effect=_mocked_get_lun):
+            ret = self.client.update_cg('cg_1_name', ['sv_1', 'sv_2'],
+                                        ['sv_3'])
+            mocked_get.assert_called_once_with('cg_1_name')
+            mocked_update.assert_called_once_with(add_luns=[lun_1, lun_2],
+                                                  remove_luns=[lun_3])
+            self.assertIsNone(ret)
+
+    def test_update_cg_empty_lun_ids(self):
+        existing_cg = MockResource(_id='cg_1')
+        with mock.patch.object(existing_cg, 'update_lun', create=True
+                               ) as mocked_update, \
+                mock.patch.object(self.client, 'get_cg',
+                                  create=True,
+                                  return_value=existing_cg) as mocked_get:
+            ret = self.client.update_cg('cg_1_name', set(), set())
+            mocked_get.assert_called_once_with('cg_1_name')
+            mocked_update.assert_called_once_with(add_luns=[], remove_luns=[])
+            self.assertIsNone(ret)
+
+    def test_create_cg_group(self):
+        existing_cg = MockResource(_id='cg_1')
+        created_snap = MockResource(_id='snap_cg_1', name='snap_name_cg_1')
+        with mock.patch.object(existing_cg, 'create_snap', create=True,
+                               return_value=created_snap) as mocked_create, \
+                mock.patch.object(self.client, 'get_cg',
+                                  create=True,
+                                  return_value=existing_cg) as mocked_get:
+            ret = self.client.create_cg_snap('cg_1_name',
+                                             snap_name='snap_name_cg_1')
+            mocked_get.assert_called_once_with('cg_1_name')
+            mocked_create.assert_called_once_with(name='snap_name_cg_1',
+                                                  is_auto_delete=False)
+            self.assertEqual(created_snap, ret)
+
+    def test_create_cg_group_none_name(self):
+        existing_cg = MockResource(_id='cg_1')
+        created_snap = MockResource(_id='snap_cg_1')
+        with mock.patch.object(existing_cg, 'create_snap', create=True,
+                               return_value=created_snap) as mocked_create, \
+                mock.patch.object(self.client, 'get_cg',
+                                  create=True,
+                                  return_value=existing_cg) as mocked_get:
+            ret = self.client.create_cg_snap('cg_1_name')
+            mocked_get.assert_called_once_with('cg_1_name')
+            mocked_create.assert_called_once_with(name=None,
+                                                  is_auto_delete=False)
+            self.assertEqual(created_snap, ret)
+
+    def test_filter_snaps_in_cg_snap(self):
+        snaps = [MockResource(_id='snap_{}'.format(n)) for n in (1, 2)]
+        snap_list = mock.MagicMock()
+        snap_list.list = snaps
+        with mock.patch.object(self.client.system, 'get_snap',
+                               create=True,
+                               return_value=snap_list) as mocked_get:
+            ret = self.client.filter_snaps_in_cg_snap('snap_cg_1')
+            mocked_get.assert_called_once_with(snap_group='snap_cg_1')
+            self.assertEqual(snaps, ret)
+
+    def test_create_replication(self):
+        remote_system = MockResource(_id='RS_1')
+        lun = MockResource(_id='sv_1')
+        called = self.client.create_replication(lun, 60, 'pool_1',
+                                                remote_system)
+        self.assertEqual(called['max_time_out_of_sync'], 60)
+        self.assertEqual(called['dst_pool_id'], 'pool_1')
+        self.assertIs(called['remote_system'], remote_system)
+
+    def test_get_remote_system(self):
+        called = self.client.get_remote_system(name='remote-unity')
+        self.assertEqual(called['name'], 'remote-unity')
+
+    def test_get_remote_system_not_exist(self):
+        called = self.client.get_remote_system(name='not-exist')
+        self.assertIsNone(called)
+
+    def test_get_replication_session(self):
+        called = self.client.get_replication_session(name='rep-name')
+        self.assertEqual(called['name'], 'rep-name')
+
+    def test_get_replication_session_not_exist(self):
+        self.assertRaises(client.ClientReplicationError,
+                          self.client.get_replication_session,
+                          name='not-exist')
+
+    def test_failover_replication(self):
+        rep_session = MockResource(_id='rep_id_1')
+        called = self.client.failover_replication(rep_session)
+        self.assertEqual(called['sync'], False)
+
+    def test_failover_replication_raise(self):
+        rep_session = MockResource(_id='rep_id_1')
+
+        def mock_failover(sync=None):
+            raise ex.UnityResourceNotFoundError()
+
+        rep_session.failover = mock_failover
+        self.assertRaises(client.ClientReplicationError,
+                          self.client.failover_replication,
+                          rep_session)
+
+    def test_failback_replication(self):
+        rep_session = MockResource(_id='rep_id_1')
+        called = self.client.failback_replication(rep_session)
+        self.assertEqual(called['force_full_copy'], True)
+
+    def test_failback_replication_raise(self):
+        rep_session = MockResource(_id='rep_id_1')
+
+        def mock_failback(force_full_copy=None):
+            raise ex.UnityResourceNotFoundError()
+
+        rep_session.failback = mock_failback
+        self.assertRaises(client.ClientReplicationError,
+                          self.client.failback_replication,
+                          rep_session)

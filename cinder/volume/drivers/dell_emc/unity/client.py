@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -26,7 +26,7 @@ else:
 
 from cinder import coordination
 from cinder import exception
-from cinder.i18n import _, _LW
+from cinder.i18n import _
 from cinder.volume.drivers.dell_emc.unity import utils
 
 LOG = log.getLogger(__name__)
@@ -57,7 +57,8 @@ class UnityClient(object):
         return self.system.serial_number
 
     def create_lun(self, name, size, pool, description=None,
-                   io_limit_policy=None):
+                   io_limit_policy=None, is_thin=None,
+                   is_compressed=None, cg_name=None):
         """Creates LUN on the Unity system.
 
         :param name: lun name
@@ -65,12 +66,17 @@ class UnityClient(object):
         :param pool: UnityPool object represent to pool to place the lun
         :param description: lun description
         :param io_limit_policy: io limit on the LUN
+        :param is_thin: if False, a thick LUN will be created
+        :param is_compressed: is compressed LUN enabled
+        :param cg_name: the name of cg to join if any
         :return: UnityLun object
         """
         try:
             lun = pool.create_lun(lun_name=name, size_gb=size,
                                   description=description,
-                                  io_limit_policy=io_limit_policy)
+                                  io_limit_policy=io_limit_policy,
+                                  is_thin=is_thin,
+                                  is_compression=is_compressed)
         except storops_ex.UnityLunNameInUseError:
             LOG.debug("LUN %s already exists. Return the existing one.",
                       name)
@@ -98,10 +104,47 @@ class UnityClient(object):
         """
         try:
             lun = self.system.get_lun(_id=lun_id)
-            lun.delete()
         except storops_ex.UnityResourceNotFoundError:
-            LOG.debug("LUN %s doesn't exist. Deletion is not needed.",
+            LOG.debug("Cannot get LUN %s from unity. Do nothing.", lun_id)
+            return
+
+        def _delete_lun_if_exist(force_snap_delete=False):
+            """Deletes LUN, skip if it doesn't exist."""
+            try:
+                lun.delete(force_snap_delete=force_snap_delete)
+            except storops_ex.UnityResourceNotFoundError:
+                LOG.debug("LUN %s doesn't exist. Deletion is not needed.",
+                          lun_id)
+
+        try:
+            _delete_lun_if_exist()
+        except storops_ex.UnityDeleteLunInReplicationError:
+            LOG.info("LUN %s is participating in replication sessions. "
+                     "Delete replication sessions first",
+                     lun_id)
+            self.delete_lun_replications(lun_id)
+
+            # It could fail if not pass in force_snap_delete when
+            # deleting the lun immediately after
+            # deleting the replication sessions.
+            _delete_lun_if_exist(force_snap_delete=True)
+
+    def delete_lun_replications(self, lun_id):
+        LOG.debug("Deleting all the replication sessions which are from "
+                  "lun %s", lun_id)
+        try:
+            rep_sessions = self.system.get_replication_session(
+                src_resource_id=lun_id)
+        except storops_ex.UnityResourceNotFoundError:
+            LOG.debug("No replication session found from lun %s. Do nothing.",
                       lun_id)
+        else:
+            for session in rep_sessions:
+                try:
+                    session.delete()
+                except storops_ex.UnityResourceNotFoundError:
+                    LOG.debug("Replication session %s doesn't exist. "
+                              "Skip the deletion.", session.get_id())
 
     def get_lun(self, lun_id=None, name=None):
         """Gets LUN on the Unity system.
@@ -113,13 +156,13 @@ class UnityClient(object):
         lun = None
         if lun_id is None and name is None:
             LOG.warning(
-                _LW("Both lun_id and name are None to get LUN. Return None."))
+                "Both lun_id and name are None to get LUN. Return None.")
         else:
             try:
                 lun = self.system.get_lun(_id=lun_id, name=name)
             except storops_ex.UnityResourceNotFoundError:
                 LOG.warning(
-                    _LW("LUN id=%(id)s, name=%(name)s doesn't exist."),
+                    "LUN id=%(id)s, name=%(name)s doesn't exist.",
                     {'id': lun_id, 'name': name})
         return lun
 
@@ -131,6 +174,11 @@ class UnityClient(object):
             LOG.debug("LUN %s is already expanded. LUN expand is not needed.",
                       lun_id)
         return lun
+
+    def migrate_lun(self, lun_id, dest_pool_id):
+        lun = self.system.get_lun(lun_id)
+        dest_pool = self.system.get_pool(dest_pool_id)
+        return lun.migrate(dest_pool)
 
     def get_pools(self):
         """Gets all storage pools on the Unity system.
@@ -160,13 +208,13 @@ class UnityClient(object):
         return snap
 
     @staticmethod
-    def delete_snap(snap, even_attached=False):
+    def delete_snap(snap):
         if snap is None:
             LOG.debug("Snap to delete is None, skipping deletion.")
             return
 
         try:
-            snap.delete(even_attached=even_attached)
+            snap.delete()
         except storops_ex.UnityResourceNotFoundError as err:
             LOG.debug("Snap %(snap_name)s may be deleted already. "
                       "Message: %(err)s",
@@ -174,21 +222,23 @@ class UnityClient(object):
                        'err': err})
         except storops_ex.UnityDeleteAttachedSnapError as err:
             with excutils.save_and_reraise_exception():
-                LOG.warning(_LW("Failed to delete snapshot %(snap_name)s "
-                                "which is in use. Message: %(err)s"),
+                LOG.warning("Failed to delete snapshot %(snap_name)s "
+                            "which is in use. Message: %(err)s",
                             {'snap_name': snap.name, 'err': err})
 
     def get_snap(self, name=None):
         try:
             return self.system.get_snap(name=name)
         except storops_ex.UnityResourceNotFoundError as err:
-            LOG.warning(
-                _LW("Snapshot %(name)s doesn't exist. Message: %(err)s"),
-                {'name': name, 'err': err})
+            LOG.warning("Snapshot %(name)s doesn't exist. Message: %(err)s",
+                        {'name': name, 'err': err})
         return None
 
     @coordination.synchronized('{self.host}-{name}')
     def create_host(self, name):
+        return self.create_host_wo_lock(name)
+
+    def create_host_wo_lock(self, name):
         """Provides existing host if exists else create one."""
         if name not in self.host_cache:
             try:
@@ -202,6 +252,10 @@ class UnityClient(object):
         else:
             host = self.host_cache[name]
         return host
+
+    def delete_host_wo_lock(self, host):
+        host.delete()
+        del self.host_cache[host.name]
 
     def update_host_initiators(self, host, uids):
         """Updates host with the supplied uids."""
@@ -254,6 +308,15 @@ class UnityClient(object):
         lun_or_snap.update()
         host.detach(lun_or_snap)
 
+    @staticmethod
+    def detach_all(lun):
+        """Detaches a `UnityLun` from all hosts.
+
+        :param lun: `UnityLun` object
+        """
+        lun.update()
+        lun.detach_from(host=None)
+
     def get_ethernet_ports(self):
         return self.system.get_ethernet_port()
 
@@ -274,10 +337,10 @@ class UnityClient(object):
         :param host: the host to which the FC port is registered.
         :param logged_in_only: whether to retrieve only the logged-in port.
 
-        :return the WWN of FC ports. For example, the FC WWN on array is like:
-        50:06:01:60:89:20:09:25:50:06:01:6C:09:20:09:25.
-        This function removes the colons and returns the last 16 bits:
-        5006016C09200925.
+        :return: the WWN of FC ports. For example, the FC WWN on array is like:
+         50:06:01:60:89:20:09:25:50:06:01:6C:09:20:09:25.
+         This function removes the colons and returns the last 16 bits:
+         5006016C09200925.
         """
         wwns = set()
         if logged_in_only:
@@ -287,9 +350,9 @@ class UnityClient(object):
                 # so use filter instead of shadow_copy here.
                 wwns.update(p.wwn.upper()
                             for p in filter(
-                                lambda fcp: (allowed_ports is None or
-                                             fcp.get_id() in allowed_ports),
-                                paths.fc_port))
+                    lambda fcp: (allowed_ports is None or
+                                 fcp.get_id() in allowed_ports),
+                    paths.fc_port))
         else:
             ports = self.get_fc_ports()
             ports = ports.shadow_copy(port_ids=allowed_ports)
@@ -313,6 +376,135 @@ class UnityClient(object):
                 qos_specs.get(utils.QOS_MAX_BWS))
         return limit_policy
 
+    def get_pool_id_by_name(self, name):
+        pool = self.system.get_pool(name=name)
+        return pool.get_id()
+
     def get_pool_name(self, lun_name):
         lun = self.system.get_lun(name=lun_name)
         return lun.pool_name
+
+    def restore_snapshot(self, snap_name):
+        snap = self.get_snap(snap_name)
+        return snap.restore(delete_backup=True)
+
+    def create_cg(self, name, description=None, lun_add=None):
+        try:
+            cg = self.system.create_cg(name, description=description,
+                                       lun_add=lun_add)
+        except storops_ex.UnityConsistencyGroupNameInUseError:
+            LOG.debug('CG %s already exists. Return the existing one.', name)
+            cg = self.system.get_cg(name=name)
+        return cg
+
+    def get_cg(self, name):
+        try:
+            cg = self.system.get_cg(name=name)
+        except storops_ex.UnityResourceNotFoundError:
+            LOG.info('CG %s not found.', name)
+            return None
+        else:
+            return cg
+
+    def delete_cg(self, name):
+        cg = self.get_cg(name)
+        if cg:
+            cg.delete()  # Deleting cg will also delete the luns in it
+
+    def update_cg(self, name, add_lun_ids, remove_lun_ids):
+        cg = self.get_cg(name)
+        cg.update_lun(add_luns=[self.get_lun(lun_id=lun_id)
+                                for lun_id in add_lun_ids],
+                      remove_luns=[self.get_lun(lun_id=lun_id)
+                                   for lun_id in remove_lun_ids])
+
+    def create_cg_snap(self, cg_name, snap_name=None):
+        cg = self.get_cg(cg_name)
+        # Creating snap of cg will create corresponding snaps of luns in it
+        return cg.create_snap(name=snap_name, is_auto_delete=False)
+
+    def filter_snaps_in_cg_snap(self, cg_snap_id):
+        return self.system.get_snap(snap_group=cg_snap_id).list
+
+    @staticmethod
+    def create_replication(src_lun, max_time_out_of_sync,
+                           dst_pool_id, remote_system):
+        """Creates a new lun on remote system and sets up replication to it."""
+        return src_lun.replicate_with_dst_resource_provisioning(
+            max_time_out_of_sync, dst_pool_id, remote_system=remote_system,
+            dst_lun_name=src_lun.name)
+
+    def get_remote_system(self, name=None):
+        """Gets remote system on the Unity system.
+
+        :param name: remote system name.
+        :return: remote system.
+        """
+        try:
+            return self.system.get_remote_system(name=name)
+        except storops_ex.UnityResourceNotFoundError:
+            LOG.warning("Not found remote system with name %s. Return None.",
+                        name)
+            return None
+
+    def get_replication_session(self, name=None,
+                                src_resource_id=None, dst_resource_id=None):
+        """Gets replication session via its name.
+
+        :param name: replication session name.
+        :param src_resource_id: replication session's src_resource_id.
+        :param dst_resource_id: replication session's dst_resource_id.
+        :return: replication session.
+        """
+        try:
+            return self.system.get_replication_session(
+                name=name, src_resource_id=src_resource_id,
+                dst_resource_id=dst_resource_id)
+        except storops_ex.UnityResourceNotFoundError:
+            raise ClientReplicationError(
+                'Replication session with name %(name)s not found.'.format(
+                    name=name))
+
+    def failover_replication(self, rep_session):
+        """Fails over a replication session.
+
+        :param rep_session: replication session to fail over.
+        """
+        name = rep_session.name
+        LOG.debug('Failing over replication: %s', name)
+        try:
+            # In OpenStack, only support to failover triggered from secondary
+            # backend because the primary could be down. Then `sync=False`
+            # is required here which means it won't sync from primary to
+            # secondary before failover.
+            return rep_session.failover(sync=False)
+        except storops_ex.UnityException as ex:
+            raise ClientReplicationError(
+                'Failover of replication: %(name)s failed, '
+                'error: %(err)s'.format(name=name, err=ex)
+            )
+        LOG.debug('Replication: %s failed over', name)
+
+    def failback_replication(self, rep_session):
+        """Fails back a replication session.
+
+        :param rep_session: replication session to fail back.
+        """
+        name = rep_session.name
+        LOG.debug('Failing back replication: %s', name)
+        try:
+            # If the replication was failed-over before initial copy done,
+            # following failback will fail without `force_full_copy` because
+            # the primary # and secondary data have no common base.
+            # `force_full_copy=True` has no effect if initial copy done.
+            return rep_session.failback(force_full_copy=True)
+        except storops_ex.UnityException as ex:
+            raise ClientReplicationError(
+                'Failback of replication: %(name)s failed, '
+                'error: %(err)s'.format(name=name, err=ex)
+            )
+        LOG.debug('Replication: %s failed back', name)
+
+
+class ClientReplicationError(exception.CinderException):
+    pass

@@ -1,4 +1,4 @@
-# Copyright (c) 2017 Dell Inc. or its subsidiaries.
+# Copyright (c) 2016 Dell Inc. or its subsidiaries.
 # All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -18,10 +18,15 @@
 from oslo_config import cfg
 from oslo_log import log as logging
 
+import six
+
 from cinder import interface
+from cinder.volume import configuration
 from cinder.volume import driver
 from cinder.volume.drivers.dell_emc.unity import adapter
+from cinder.volume.drivers.dell_emc.unity import replication
 from cinder.volume.drivers.san.san import san_opts
+from cinder.volume import volume_utils
 from cinder.zonemanager import utils as zm_utils
 
 LOG = logging.getLogger(__name__)
@@ -30,40 +35,56 @@ CONF = cfg.CONF
 
 UNITY_OPTS = [
     cfg.ListOpt('unity_storage_pool_names',
-                default=None,
+                default=[],
                 help='A comma-separated list of storage pool names to be '
-                'used.'),
+                     'used.'),
     cfg.ListOpt('unity_io_ports',
-                default=None,
+                default=[],
                 help='A comma-separated list of iSCSI or FC ports to be used. '
                      'Each port can be Unix-style glob expressions.'),
-    cfg.BoolOpt('force_delete_attached_snapshots',
+    cfg.BoolOpt('remove_empty_host',
                 default=False,
-                help='To force delete the snapshot from Unity even when it is '
-                     'attached to hosts. Be careful to set it to True. If the '
-                     'snapshot is attached, force deleting it could cause data'
-                     'unaccessble and/or data loss. By default, it is False.')]
+                help='To remove the host from Unity when the last LUN is '
+                     'detached from it. By default, it is False.')]
 
-CONF.register_opts(UNITY_OPTS)
+CONF.register_opts(UNITY_OPTS, group=configuration.SHARED_CONF_GROUP)
+
+
+def skip_if_not_cg(func):
+    @six.wraps(func)
+    def inner(self, *args, **kwargs):
+        # Only used to decorating the second argument is `group`
+        if volume_utils.is_group_a_cg_snapshot_type(args[1]):
+            return func(self, *args, **kwargs)
+
+        LOG.debug('Group is not a consistency group. Unity driver does '
+                  'nothing.')
+        # This exception will let cinder handle it as a generic group
+        raise NotImplementedError()
+    return inner
 
 
 @interface.volumedriver
-class UnityDriver(driver.TransferVD,
-                  driver.ManageableVD,
+class UnityDriver(driver.ManageableVD,
                   driver.ManageableSnapshotsVD,
                   driver.BaseVD):
     """Unity Driver.
 
-    Version history:
-        00.05.00 - Initial version
-        00.05.01 - Backport thin clone from Pike
-        00.05.02 - Fixed bug 170311: temp snapshot for backup was deleted twice
-        00.05.03 - Fixed bug 1798529: add option for force deleting attached
-                   snapshots
-        00.05.04 - Fixed bug which create volume related logs failed to print
+    .. code-block:: none
+
+      Version history:
+        1.0.0 - Initial version
+        2.0.0 - Add thin clone support
+        3.0.0 - Add IPv6 support
+        3.1.0 - Support revert to snapshot API
+        4.0.0 - Support remove empty host
+        4.2.0 - Support compressed volume
+        5.0.0 - Support storage assisted volume migration
+        6.0.0 - Support generic group and consistent group
+        6.1.0 - Support volume replication
     """
 
-    VERSION = '00.05.04'
+    VERSION = '06.01.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
@@ -72,16 +93,26 @@ class UnityDriver(driver.TransferVD,
         super(UnityDriver, self).__init__(*args, **kwargs)
         self.configuration.append_config_values(UNITY_OPTS)
         self.configuration.append_config_values(san_opts)
+
+        # active_backend_id is not None if the service is failed over.
+        self.active_backend_id = kwargs.get('active_backend_id')
+        self.replication_manager = replication.ReplicationManager()
         protocol = self.configuration.storage_protocol
         if protocol.lower() == adapter.PROTOCOL_FC.lower():
             self.protocol = adapter.PROTOCOL_FC
-            self.adapter = adapter.FCAdapter(self.VERSION)
         else:
             self.protocol = adapter.PROTOCOL_ISCSI
-            self.adapter = adapter.ISCSIAdapter(self.VERSION)
+
+    @staticmethod
+    def get_driver_options():
+        return UNITY_OPTS
 
     def do_setup(self, context):
-        self.adapter.do_setup(self, self.configuration)
+        self.replication_manager.do_setup(self)
+
+    @property
+    def adapter(self):
+        return self.replication_manager.active_adapter
 
     def check_for_setup_error(self):
         pass
@@ -105,6 +136,10 @@ class UnityDriver(driver.TransferVD,
     def delete_volume(self, volume):
         """Deletes a volume."""
         self.adapter.delete_volume(volume)
+
+    def migrate_volume(self, context, volume, host):
+        """Migrates a volume."""
+        return self.adapter.migrate_volume(volume, host)
 
     def create_snapshot(self, snapshot):
         """Creates a snapshot."""
@@ -130,7 +165,6 @@ class UnityDriver(driver.TransferVD,
         """Make sure volume is exported."""
         pass
 
-    @zm_utils.AddFCZone
     def initialize_connection(self, volume, connector):
         """Initializes the connection and returns connection info.
 
@@ -144,6 +178,9 @@ class UnityDriver(driver.TransferVD,
         and a list of wwns which are visible to the remote wwn(s).
         Example return values:
         FC:
+
+        .. code-block:: json
+
             {
                 'driver_volume_type': 'fibre_channel'
                 'data': {
@@ -156,7 +193,11 @@ class UnityDriver(driver.TransferVD,
                     }
                 }
             }
+
         iSCSI:
+
+        .. code-block:: json
+
             {
                 'driver_volume_type': 'iscsi'
                 'data': {
@@ -167,13 +208,17 @@ class UnityDriver(driver.TransferVD,
                     'target_luns': [1, 1],
                 }
             }
-        """
-        return self.adapter.initialize_connection(volume, connector)
 
-    @zm_utils.RemoveFCZone
+        """
+        conn_info = self.adapter.initialize_connection(volume, connector)
+        zm_utils.add_fc_zone(conn_info)
+        return conn_info
+
     def terminate_connection(self, volume, connector, **kwargs):
         """Disallow connection from connector."""
-        return self.adapter.terminate_connection(volume, connector)
+        conn_info = self.adapter.terminate_connection(volume, connector)
+        zm_utils.remove_fc_zone(conn_info)
+        return conn_info
 
     def get_volume_stats(self, refresh=False):
         """Get volume stats.
@@ -235,3 +280,52 @@ class UnityDriver(driver.TransferVD,
 
     def terminate_connection_snapshot(self, snapshot, connector, **kwargs):
         return self.adapter.terminate_connection_snapshot(snapshot, connector)
+
+    def revert_to_snapshot(self, context, volume, snapshot):
+        """Reverts a volume to a snapshot."""
+        return self.adapter.restore_snapshot(volume, snapshot)
+
+    @skip_if_not_cg
+    def create_group(self, context, group):
+        """Creates a consistency group."""
+        return self.adapter.create_group(group)
+
+    @skip_if_not_cg
+    def delete_group(self, context, group, volumes):
+        """Deletes a consistency group."""
+        return self.adapter.delete_group(group)
+
+    @skip_if_not_cg
+    def update_group(self, context, group, add_volumes=None,
+                     remove_volumes=None):
+        """Updates a consistency group, i.e. add/remove luns to/from it."""
+        # TODO(Ryan L) update other information (like description) of group
+        return self.adapter.update_group(group, add_volumes, remove_volumes)
+
+    @skip_if_not_cg
+    def create_group_from_src(self, context, group, volumes,
+                              group_snapshot=None, snapshots=None,
+                              source_group=None, source_vols=None):
+        """Creates a consistency group from another group or group snapshot."""
+        if group_snapshot:
+            return self.adapter.create_group_from_snap(group, volumes,
+                                                       group_snapshot,
+                                                       snapshots)
+        elif source_group:
+            return self.adapter.create_cloned_group(group, volumes,
+                                                    source_group, source_vols)
+
+    @skip_if_not_cg
+    def create_group_snapshot(self, context, group_snapshot, snapshots):
+        """Creates a snapshot of consistency group."""
+        return self.adapter.create_group_snapshot(group_snapshot, snapshots)
+
+    @skip_if_not_cg
+    def delete_group_snapshot(self, context, group_snapshot, snapshots):
+        """Deletes a snapshot of consistency group."""
+        return self.adapter.delete_group_snapshot(group_snapshot)
+
+    def failover_host(self, context, volumes, secondary_id=None, groups=None):
+        """Failovers volumes to secondary backend."""
+        return self.adapter.failover(volumes,
+                                     secondary_id=secondary_id, groups=groups)
