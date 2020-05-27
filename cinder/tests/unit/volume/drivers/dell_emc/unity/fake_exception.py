@@ -58,6 +58,10 @@ class DetachIsCalled(Exception):
     pass
 
 
+class DetachAllIsCalled(Exception):
+    pass
+
+
 class LunDeleteIsCalled(Exception):
     pass
 

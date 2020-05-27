@@ -57,6 +57,7 @@ class UnityDriver(driver.TransferVD,
     """Unity Driver.
 
     Version history:
+        00.04.12 - Support multi-attach (cherry-pick from downstream pike)
         00.04.11 - Fixes bug 1879705 to make sure lun could be deleted even
                    though the lun has hosts accessed. (cherry pick from
                    downstream pike)
@@ -67,12 +68,12 @@ class UnityDriver(driver.TransferVD,
         00.04.06 - Backport thin clone from Newton
         00.04.05 - Fix Coordinator uninitialized issue
         00.04.04 - Fix duplicate hosts created with same name (cherry-pick from
-                   downstream Newton
+                   downstream newton)
         00.04.03 - Add TransferVD to base, and fix version number
         00.04.02 - Initial version
     """
 
-    VERSION = '00.04.11'
+    VERSION = '00.04.12'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
