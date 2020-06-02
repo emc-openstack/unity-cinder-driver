@@ -78,9 +78,10 @@ class UnityDriver(driver.ManageableVD,
         4.1.0 - Support generic group and consistent group
         4.2.0 - Fixes bug 1879705 to make sure lun could be deleted
                 even though the lun has hosts accessed.
+        4.3.0 - Support new QoS keys
     """
 
-    VERSION = '04.02.00'
+    VERSION = '04.03.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
