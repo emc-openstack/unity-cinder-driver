@@ -249,10 +249,11 @@ following commands to create a thick volume.
 QoS support
 ~~~~~~~~~~~
 
-Unity driver supports ``maxBWS`` and ``maxIOPS`` specs for the back-end
-consumer type. ``maxBWS`` represents the ``Maximum IO/S`` absolute limit,
-``maxIOPS`` represents the ``Maximum Bandwidth (KBPS)`` absolute limit on the
-Unity respectively.
+Unity driver supports ``total_bytes_sec``/``maxBWS`` and ``total_iops_sec``/
+``maxIOPS`` for the back-end consumer type.
+``total_bytes_sec``/``maxBWS`` represents the ``Maximum Bandwidth (KBPS)``
+absolute limit and ``total_iops_sec``/``maxIOPS`` represents the
+``Maximum IO/S`` absolute limit on the Unity respectively.
 
 
 Auto-zoning support

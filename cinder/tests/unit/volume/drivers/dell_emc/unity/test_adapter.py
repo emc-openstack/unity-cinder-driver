@@ -274,6 +274,20 @@ def get_volume_type_extra_specs(type_id):
     return {}
 
 
+def get_volume_type_qos_specs(qos_id):
+    if qos_id == 'qos':
+        return {'qos_specs': {'id': u'qos_type_id_1',
+                              'consumer': u'back-end',
+                              u'qos_bws': u'102400',
+                              u'qos_iops': u'500'}}
+    if qos_id == 'qos_2':
+        return {'qos_specs': {'id': u'qos_type_id_2',
+                              'consumer': u'back-end',
+                              u'qos_bws': u'102402',
+                              u'qos_iops': u'502'}}
+    return {'qos_specs': {}}
+
+
 def patch_for_unity_adapter(func):
     @functools.wraps(func)
     @mock.patch('cinder.volume.volume_types.get_volume_type_extra_specs',

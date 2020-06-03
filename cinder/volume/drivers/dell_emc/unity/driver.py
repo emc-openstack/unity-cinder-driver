@@ -57,6 +57,7 @@ class UnityDriver(driver.TransferVD,
     """Unity Driver.
 
     Version history:
+        00.04.10 - Support new QoS keys (cherry pick from downstream pike)
         00.04.09 - Support of removing empty host
         00.04.08 - Enalbe SSL support
         00.04.07 - Fixed bug which create volume related logs failed to print
@@ -68,7 +69,7 @@ class UnityDriver(driver.TransferVD,
         00.04.02 - Initial version
     """
 
-    VERSION = '00.04.09'
+    VERSION = '00.04.10'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"

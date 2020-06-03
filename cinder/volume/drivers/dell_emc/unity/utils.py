@@ -32,8 +32,8 @@ from cinder.zonemanager import utils as zm_utils
 
 LOG = logging.getLogger(__name__)
 BACKEND_QOS_CONSUMERS = frozenset(['back-end', 'both'])
-QOS_MAX_IOPS = 'maxIOPS'
-QOS_MAX_BWS = 'maxBWS'
+QOS_MAX_IOPS = 'qos_iops'
+QOS_MAX_BWS = 'qos_bws'
 
 
 def dump_provider_location(location_dict):
@@ -254,8 +254,9 @@ def get_backend_qos_specs(volume):
     if consumer not in BACKEND_QOS_CONSUMERS:
         return None
 
-    max_iops = qos_specs['specs'].get(QOS_MAX_IOPS)
-    max_bws = qos_specs['specs'].get(QOS_MAX_BWS)
+    specs = qos_specs['specs']
+    max_iops = specs.get('total_iops_sec') or specs.get('maxIOPS')
+    max_bws = specs.get('total_bytes_sec') or specs.get('maxBWS')
     if max_iops is None and max_bws is None:
         return None
 
