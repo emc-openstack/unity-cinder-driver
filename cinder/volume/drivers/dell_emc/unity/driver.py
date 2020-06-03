@@ -52,17 +52,17 @@ class UnityDriver(driver.ManageableVD,
                   driver.BaseVD):
     """Unity Driver.
 
-    Version history:
-
     .. code-block:: none
 
+      Version history:
         1.0.0 - Initial version
         2.0.0 - Add thin clone support
         2.1.0 - Cherry-pick the multi-attach support
         2.2.0 - Enalbe SSL support
+        2.3.0 - Support new QoS keys (cherry pick from downstream train)
     """
 
-    VERSION = '02.02.00'
+    VERSION = '02.03.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
