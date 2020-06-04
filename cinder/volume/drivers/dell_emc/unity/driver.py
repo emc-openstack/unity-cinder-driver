@@ -76,9 +76,11 @@ class UnityDriver(driver.ManageableVD,
         3.1.0 - Support revert to snapshot API
         4.0.0 - Support remove empty host
         4.1.0 - Support generic group and consistent group
+        4.2.0 - Fixes bug 1879705 to make sure lun could be deleted
+                even though the lun has hosts accessed.
     """
 
-    VERSION = '04.01.00'
+    VERSION = '04.02.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
