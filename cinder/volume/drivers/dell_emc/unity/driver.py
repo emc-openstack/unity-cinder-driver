@@ -60,9 +60,12 @@ class UnityDriver(driver.ManageableVD,
         2.1.0 - Cherry-pick the multi-attach support
         2.2.0 - Enalbe SSL support
         2.3.0 - Support new QoS keys (cherry pick from downstream train)
+        2.4.0 - Fixes bug 1879705 to make sure lun could be deleted even
+                though the lun has hosts accessed. (cherry pick from
+                downstream train)
     """
 
-    VERSION = '02.03.00'
+    VERSION = '02.04.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
