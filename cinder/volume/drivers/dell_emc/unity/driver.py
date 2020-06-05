@@ -57,6 +57,9 @@ class UnityDriver(driver.TransferVD,
     """Unity Driver.
 
     Version history:
+        00.04.11 - Fixes bug 1879705 to make sure lun could be deleted even
+                   though the lun has hosts accessed. (cherry pick from
+                   downstream pike)
         00.04.10 - Support new QoS keys (cherry pick from downstream pike)
         00.04.09 - Support of removing empty host
         00.04.08 - Enalbe SSL support
@@ -69,7 +72,7 @@ class UnityDriver(driver.TransferVD,
         00.04.02 - Initial version
     """
 
-    VERSION = '00.04.10'
+    VERSION = '00.04.11'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
