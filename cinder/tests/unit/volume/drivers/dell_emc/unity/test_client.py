@@ -260,7 +260,11 @@ class MockSystem(object):
             return lun
         if _id == 'lun_host_attached':
             lun = MockResource(name=_id, _id=_id)
-            lun.host_access = ['host1', 'host2']
+            host_access_1 = MockResource(_id='host_access_1')
+            host_access_1.host = MockResource(name='host_1', _id='host_1')
+            host_access_2 = MockResource(_id='host_access_2')
+            host_access_2.host = MockResource(name='host_2', _id='host_2')
+            lun.host_access = [host_access_1, host_access_2]
             return lun
         return MockResource(name, _id)
 
