@@ -238,6 +238,14 @@ class MockSystem(object):
             lun = MockResource(name=_id, _id=_id)
             lun.total_size_gb = 7
             return lun
+        if _id == 'lun_host_attached':
+            lun = MockResource(name=_id, _id=_id)
+            host_access_1 = MockResource(_id='host_access_1')
+            host_access_1.host = MockResource(name='host_1', _id='host_1')
+            host_access_2 = MockResource(_id='host_access_2')
+            host_access_2.host = MockResource(name='host_2', _id='host_2')
+            lun.host_access = [host_access_1, host_access_2]
+            return lun
         return MockResource(name, _id)
 
     @staticmethod
@@ -368,6 +376,22 @@ class ClientTest(unittest.TestCase):
             self.client.delete_lun('not_found')
         except ex.StoropsException:
             self.fail('not found error should be dealt with silently.')
+
+    def test_delete_lun_with_host_attached(self):
+        lun = self.client.system.get_lun(_id='lun_host_attached')
+
+        def lun_modify(host_access):
+            lun.host_access = host_access
+
+        lun.modify = mock.MagicMock(side_effect=lun_modify)
+
+        with mock.patch.object(client, 'storops', new='True'):
+            unity_client = client.UnityClient('1.2.3.4', 'user', 'pass')
+            unity_client._system = mock.MagicMock()
+            unity_client._system.get_lun.return_value = lun
+            unity_client.delete_lun('lun_host_attached')
+            lun.modify.assert_called_with(host_access=[])
+            self.assertEqual([], lun.host_access)
 
     def test_get_lun_with_id(self):
         lun = self.client.get_lun('lun4')
@@ -539,6 +563,7 @@ class ClientTest(unittest.TestCase):
 
     def test_delete_host_wo_lock(self):
         host = MockResource(name='empty-host')
+        self.client.host_cache['empty-host'] = host
         self.assertRaises(ex.HostDeleteIsCalled,
                           self.client.delete_host_wo_lock,
                           host)

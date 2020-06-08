@@ -100,10 +100,26 @@ class UnityClient(object):
         """
         try:
             lun = self.system.get_lun(_id=lun_id)
-            lun.delete()
         except storops_ex.UnityResourceNotFoundError:
-            LOG.debug("LUN %s doesn't exist. Deletion is not needed.",
-                      lun_id)
+            LOG.debug("Cannot get LUN %s from unity. Do nothing.", lun_id)
+            return
+
+        def _delete_lun_if_exist():
+            """Deletes LUN, skip if it doesn't exist."""
+            try:
+                if hasattr(lun, 'host_access') and lun.host_access:
+                    LOG.info("LUN %(id)s has hosts accessed, hosts: "
+                             "%(hosts)s, remove these accesses anyway.",
+                             {'id': lun_id,
+                              'hosts': [host_access.host.name for host_access
+                                        in lun.host_access]})
+                    lun.modify(host_access=[])
+                lun.delete()
+            except storops_ex.UnityResourceNotFoundError:
+                LOG.debug("LUN %s doesn't exist. Deletion is not needed.",
+                          lun_id)
+
+        _delete_lun_if_exist()
 
     def get_lun(self, lun_id=None, name=None):
         """Gets LUN on the Unity system.
