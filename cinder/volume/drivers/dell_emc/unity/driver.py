@@ -63,9 +63,11 @@ class UnityDriver(driver.ManageableVD,
         2.4.0 - Fixes bug 1879705 to make sure lun could be deleted even
                 though the lun has hosts accessed. (cherry pick from
                 downstream train)
+        2.5.0 - Fixed bug which create volume related logs failed to print
+                (cherry pick from downstream newton)
     """
 
-    VERSION = '02.04.00'
+    VERSION = '02.05.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
