@@ -298,3 +298,18 @@ def lock_if(condition, lock_name):
         return coordination.synchronized(lock_name)
     else:
         return functools.partial
+
+
+def is_multiattach_to_host(volume_attachment, host_name):
+    # When multiattach is enabled, a volume could be attached to two or more
+    # instances which are hosted on one nova host.
+    # Because unity cannot recognize the volume is attached to two or more
+    # instances, we should keep the volume attached to the nova host until
+    # the volume is detached from the last instance.
+    if not volume_attachment:
+        return False
+
+    attachment = [a for a in volume_attachment
+                  if a.attach_status == 'attached' and
+                  a.attached_host == host_name]
+    return len(attachment) > 1
