@@ -85,9 +85,11 @@ class UnityDriver(driver.ManageableVD,
         6.2.0 - Support new QoS keys
         6.3.0 - Fixes bug 1879705 to make sure lun could be deleted
                 even though the lun has hosts accessed.
+        6.4.0 - Fixes bug 1883677 to convert the value of total_bytes_sec
+                to KBPS to set correct bandwidth
     """
 
-    VERSION = '06.03.00'
+    VERSION = '06.04.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
