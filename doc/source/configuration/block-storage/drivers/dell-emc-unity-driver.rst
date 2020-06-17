@@ -250,9 +250,13 @@ QoS support
 
 Unity driver supports ``total_bytes_sec``/``maxBWS`` and ``total_iops_sec``/
 ``maxIOPS`` for the back-end consumer type.
-``total_bytes_sec``/``maxBWS`` represents the ``Maximum Bandwidth (KBPS)``
-absolute limit and ``total_iops_sec``/``maxIOPS`` represents the
-``Maximum IO/S`` absolute limit on the Unity respectively.
+``total_bytes_sec`` represents the ``Maximum Bandwidth in Bytes`` absolute
+limit while ``maxBWS`` represents the ``Maximum Bandwidth in KB`` absolute
+limit and ``total_iops_sec``/``maxIOPS`` represents the ``Maximum IO/S``
+absolute limit on the Unity respectively.
+If ``total_iops_sec``, ``maxIOPS``, ``total_bytes_sec`` and ``maxBWS`` are
+set at the same time, ``total_iops_sec`` and ``total_bytes_sec`` will be
+chosen.
 
 
 Auto-zoning support
