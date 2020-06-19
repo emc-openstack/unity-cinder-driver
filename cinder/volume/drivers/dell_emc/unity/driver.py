@@ -57,6 +57,9 @@ class UnityDriver(driver.TransferVD,
     """Unity Driver.
 
     Version history:
+        00.04.13 - Fixes bug 1883677 to convert the value of total_bytes_sec
+                   to KBPS to set correct bandwidth (cherry pick from
+                   downstream pike)
         00.04.12 - Support multi-attach (cherry-pick from downstream pike)
         00.04.11 - Fixes bug 1879705 to make sure lun could be deleted even
                    though the lun has hosts accessed. (cherry pick from
@@ -73,7 +76,7 @@ class UnityDriver(driver.TransferVD,
         00.04.02 - Initial version
     """
 
-    VERSION = '00.04.12'
+    VERSION = '00.04.13'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
