@@ -65,9 +65,12 @@ class UnityDriver(driver.ManageableVD,
                 downstream train)
         2.5.0 - Fixed bug which create volume related logs failed to print
                 (cherry pick from downstream newton)
+        2.6.0 - Fixes bug 1883677 to convert the value of total_bytes_sec
+                to KBPS to set correct bandwidth (cherry pick from
+                downstream train)
     """
 
-    VERSION = '02.05.00'
+    VERSION = '02.06.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
