@@ -256,7 +256,8 @@ def get_backend_qos_specs(volume):
 
     specs = qos_specs['specs']
     max_iops = specs.get('total_iops_sec') or specs.get('maxIOPS')
-    max_bws = specs.get('total_bytes_sec') or specs.get('maxBWS')
+    max_bps = specs.get('total_bytes_sec')
+    max_bws = int(max_bps) // 1024 if max_bps else specs.get('maxBWS')
     if max_iops is None and max_bws is None:
         return None
 
