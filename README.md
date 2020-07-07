@@ -311,11 +311,36 @@ and adds it to each host to occupy the HLU 0 during volume attachment.
 Efficient non-disruptive volume backup
 --------------------------------------
 
-The default implementation in Block Storage for non-disruptive volume backup is
-not efficient since a cloned volume will be created during backup.
+Unity driver supports the efficient non-disruptive volume backup by creating a
+snapshot for the volume and use Unity-assisted volume clone (`Thinclone`) to
+clone a volume from volume or snapshot.
 
-An effective approach to backups is to create a snapshot for the volume and
-connect this snapshot to the Block Storage host for volume backup.
+Some thirdparty backup procedures (i.e. Avamar) will use volume clone directly
+to backup an attached (`in-use`) volume. `Thinclone` doesn't support to clone
+an attached volume however. So, for these backup procedures, `efficient_backup`
+volume metadata can be used to create the backup volume for the attached
+volume. This metadata makes Unity driver use `Thinclone` even when the
+volume is attached:
+
+```bash
+$ cinder create --source-volid <source-void> --name "backup_volume" --metadata efficient_backup=True
+```
+
+Or
+
+```bash
+$ cinder create --snapshot-id <snapshot-id> --name "backup_volume" --metadata efficient_backup=True
+```
+
+**Constraints**
+
+- Unity OE should be 4.2 or newer for `Thinclone`.
+- There is a limitation for the `Thinclone` number in the same LUN family of
+  Unity. Every time when the limitation reaches, the Unity driver will
+  `dd`-copy a new volume as the new base of Thinclones. So, the backup is not
+  so efficient for `dd`-copy cloned volumes.
+- Thirdparty backup procedures which clone attached volumes directly should
+  make sure there is no data written to the volume during backup.
 
 Troubleshooting
 ---------------

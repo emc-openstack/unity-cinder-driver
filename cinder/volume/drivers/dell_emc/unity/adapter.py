@@ -729,7 +729,21 @@ class CommonAdapter(object):
                       'name: %(name)s, id: %(id)s.',
                       {'name': src_snap_name,
                        'id': src_snap.get_id()})
-            if src_vref.volume_attachment:
+
+            is_efficient_backup = utils.is_efficient_backup(volume)
+            if is_efficient_backup:
+                LOG.debug('The cloned volume %s is used for efficient '
+                          'non-disruptive backup (with `efficient_backup` '
+                          'metadata).', volume.name)
+
+            if src_vref.volume_attachment and not is_efficient_backup:
+                # Do NOT remove the check of attached volume. If the attached
+                # volume has thinclones beyond the Unity limitation, the base
+                # of new thinclones are dd-copied from the original volume.
+                # Then any data written to the original volume will cause data
+                # lose on the dd-copied volume. So, attached volumes are not
+                # allowed to use thinclone except the ones for efficient
+                # non-disruptive backup.
                 lun = self._dd_copy(vol_params, src_snap, src_lun=src_lun)
                 LOG.debug('Volume copied using dd because source volume: '
                           '%(name)s is attached: %(attach)s.',
@@ -737,6 +751,10 @@ class CommonAdapter(object):
                            'attach': src_vref.volume_attachment})
                 return self.makeup_model(lun)
             else:
+                # For efficient non-disruptive backup, thinclone is used even
+                # when the volume is attached. The backup procedure
+                # (ie Avamar) should make sure there is no data written to the
+                # volume during the backup.
                 lun = self._thin_clone(vol_params, src_snap, src_lun=src_lun)
                 return self.makeup_model(lun, is_snap_lun=True)
 

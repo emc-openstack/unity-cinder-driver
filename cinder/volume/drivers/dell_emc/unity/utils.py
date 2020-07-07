@@ -314,3 +314,24 @@ def is_multiattach_to_host(volume_attachment, host_name):
                   if a.attach_status == 'attached' and
                   a.attached_host == host_name]
     return len(attachment) > 1
+
+
+def get_metadata(volume):
+    # Metadata may come from 'volume_metadata' or 'metadata', here
+    # we need to take care both of them.
+    volume_metadata = {}
+    if 'volume_metadata' in volume:
+        for metadata in volume['volume_metadata']:
+            volume_metadata[metadata['key']] = metadata['value']
+        return volume_metadata
+    return volume['metadata'] if 'metadata' in volume else {}
+
+
+def is_efficient_backup(volume):
+    """Checks if the volume is used for efficient backup.
+
+    It is for thirdparty backup procedures.
+    """
+    metadata = get_metadata(volume)
+    return ('efficient_backup' in metadata
+            and metadata['efficient_backup'].lower() == 'true')

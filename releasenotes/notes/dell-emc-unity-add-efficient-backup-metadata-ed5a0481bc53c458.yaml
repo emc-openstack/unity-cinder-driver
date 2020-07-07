@@ -1,0 +1,5 @@
+---
+features:
+  - |
+    Dell EMC Unity: Add `efficient_backup` metadata. Thirdpart backup
+    procedures could use this metadata to backup attached volumes efficiently.
