@@ -57,6 +57,7 @@ class UnityDriver(driver.TransferVD,
     """Unity Driver.
 
     Version history:
+        00.04.15 - Support compressed volume (cherry pick from downstream pike)
         00.04.14 - Fixes the bug which thick volume failed to create (cherry
                    pick from downstream pike)
         00.04.13 - Fixes bug 1883677 to convert the value of total_bytes_sec
@@ -78,7 +79,7 @@ class UnityDriver(driver.TransferVD,
         00.04.02 - Initial version
     """
 
-    VERSION = '00.04.14'
+    VERSION = '00.04.15'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
