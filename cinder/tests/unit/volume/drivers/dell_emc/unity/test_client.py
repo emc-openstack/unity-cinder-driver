@@ -50,6 +50,7 @@ class MockResource(object):
         self.host_cache = []
         self.is_thin = None
         self.is_all_flash = True
+        self.snap = True
 
     @property
     def id(self):
@@ -183,16 +184,19 @@ class MockResource(object):
     def storage_resource(self, value):
         self._storage_resource = value
 
-    def modify(self, name=None):
+    def modify(self, name=None, is_compression=None, io_limit_policy=None):
         self.name = name
+
+    def remove_from_storage(self, lun):
+        pass
 
     def thin_clone(self, name, io_limit_policy=None, description=None):
         if name == 'thin_clone_name_in_use':
             raise ex.UnityLunNameInUseError
         return MockResource(_id=name, name=name)
 
-    def migrate(self, dest_pool):
-        if dest_pool.id == 'pool_2':
+    def migrate(self, dest_pool, **kwargs):
+        if dest_pool.id == 'fail_migration_pool':
             return False
         return True
 
@@ -585,8 +589,16 @@ class ClientTest(unittest.TestCase):
         self.assertTrue(ret)
 
     def test_migrate_lun_failed(self):
-        ret = self.client.migrate_lun('lun_0', 'pool_2')
+        ret = self.client.migrate_lun('lun_0', 'fail_migration_pool')
         self.assertFalse(ret)
+
+    def test_migrate_lun_thick(self):
+        ret = self.client.migrate_lun('lun_thick', 'pool_2', 'thick')
+        self.assertTrue(ret)
+
+    def test_migrate_lun_compressed(self):
+        ret = self.client.migrate_lun('lun_compressed', 'pool_2', 'compressed')
+        self.assertTrue(ret)
 
     def test_get_pool_id_by_name(self):
         self.assertEqual('pool_3', self.client.get_pool_id_by_name('Pool 3'))
