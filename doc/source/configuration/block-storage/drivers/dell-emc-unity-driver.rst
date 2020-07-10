@@ -31,6 +31,7 @@ Supported operations
 - Clone a volume.
 - Extend a volume.
 - Migrate a volume.
+- Retype a volume.
 - Get volume statistics.
 - Efficient non-disruptive volume backup.
 - Revert a volume to a snapshot.
@@ -288,6 +289,23 @@ triggered. Instead, host-assisted volume migration will be triggered:
 - Volume is to be migrated across backends.
 - Migration of cloned volume. For example, if vol_2 was cloned from vol_1,
   the storage-assisted volume migration of vol_2 will not be triggered.
+
+
+Retype volume support
+~~~~~~~~~~~~~~~~~~~~~
+
+Unity driver supports to change a volume's type after its creation.
+
+.. code-block:: console
+
+   $ cinder retype [--migration-policy <never|on-demand>] <volume> <volume-type>
+
+The --migration-policy is not enabled by default.
+Some retype operations will require migration based on back-end support.
+In these cases, the storage-assisted migration will be triggered regardless
+the --migration-policy. For examples: retype between 'thin' and 'thick', retype
+between 'thick' and 'compressed', retype to type(s) current host doesn't
+support.
 
 
 QoS support
