@@ -37,6 +37,10 @@ LOG = logging.getLogger(__name__)
 BACKEND_QOS_CONSUMERS = frozenset(['back-end', 'both'])
 QOS_MAX_IOPS = 'qos_iops'
 QOS_MAX_BWS = 'qos_bws'
+PROVISIONING_TYPE = 'provisioning:type'
+PROVISIONING_COMPRESSED = 'compressed'
+QOS_SPECS = 'qos_specs'
+QOS_ID = 'id'
 
 
 def dump_provider_location(location_dict):
@@ -110,6 +114,48 @@ def validate_pool_names(conf_pools, array_pools):
         raise exception.VolumeBackendAPIException(data=msg)
 
     return existed
+
+
+def retype_need_migration(volume, old_provision, new_provision, host):
+    LOG.debug('Check if migration is needed, volume host: %(volume_host)s, '
+              'old provision: %(old_provision)s, new provision: '
+              '%(new_provision)s, host: %(host)s.',
+              {'volume_host': volume['host'], 'old_provision': old_provision,
+               'new_provision': new_provision, 'host': host['host']})
+    if volume['host'] != host['host']:
+        return True
+
+    if old_provision != new_provision:
+        if retype_need_change_compression(old_provision, new_provision)[0]:
+            return False
+        else:
+            return True
+    return False
+
+
+def retype_need_change_compression(old_provision, new_provision):
+    """:return: whether need change compression and the new value"""
+    LOG.debug('Check if change compression is needed, Old provision: '
+              '%(old_provision)s, New provision: %(new_provision)s.',
+              {'old_provision': old_provision,
+               'new_provision': new_provision})
+    if ((not old_provision or old_provision == 'thin') and
+            new_provision == PROVISIONING_COMPRESSED):
+        return True, True
+    elif (old_provision == PROVISIONING_COMPRESSED and
+          (not new_provision or old_provision == 'thin')):
+        return True, False
+    # no need change compression
+    return False, None
+
+
+def retype_need_change_qos(old_qos=None, new_qos=None):
+    LOG.debug('Check if change QoS is needed, Old QoS: %(old_qos)s, '
+              'New QoS: %(new_qos)s.',
+              {'old_qos': old_qos, 'new_qos': new_qos})
+    old = old_qos.get(QOS_SPECS).get(QOS_ID) if old_qos.get(QOS_SPECS) else ''
+    new = new_qos.get(QOS_SPECS).get(QOS_ID) if new_qos.get(QOS_SPECS) else ''
+    return old != new
 
 
 def extract_iscsi_uids(connector):
@@ -257,6 +303,28 @@ def create_lookup_service():
     return zm_utils.create_lookup_service()
 
 
+def get_values_from_qos_specs(qos_specs):
+    if qos_specs is None:
+        return None
+
+    specs = qos_specs.get('specs')
+    if specs is None:
+        return None
+
+    max_iops = specs.get('total_iops_sec') or specs.get('maxIOPS')
+    max_bps = specs.get('total_bytes_sec')
+    max_bws = int(max_bps) // 1024 if max_bps else specs.get('maxBWS')
+
+    if max_iops is None and max_bws is None:
+        return None
+
+    return {
+        'id': qos_specs['id'],
+        QOS_MAX_IOPS: max_iops,
+        QOS_MAX_BWS: max_bws,
+    }
+
+
 def get_backend_qos_specs(volume):
     type_id = volume.volume_type_id
     if type_id is None:
@@ -275,18 +343,7 @@ def get_backend_qos_specs(volume):
     if consumer not in BACKEND_QOS_CONSUMERS:
         return None
 
-    specs = qos_specs['specs']
-    max_iops = specs.get('total_iops_sec') or specs.get('maxIOPS')
-    max_bps = specs.get('total_bytes_sec')
-    max_bws = int(max_bps) // 1024 if max_bps else specs.get('maxBWS')
-    if max_iops is None and max_bws is None:
-        return None
-
-    return {
-        'id': qos_specs['id'],
-        QOS_MAX_IOPS: max_iops,
-        QOS_MAX_BWS: max_bws,
-    }
+    return get_values_from_qos_specs(qos_specs)
 
 
 def remove_empty(option, value_list):

@@ -87,9 +87,10 @@ class UnityDriver(driver.ManageableVD,
                 even though the lun has hosts accessed.
         6.4.0 - Fixes bug 1883677 to convert the value of total_bytes_sec
                 to KBPS to set correct bandwidth
+        6.5.0 - Support retype volume (cherry pick from upstream ussuri)
     """
 
-    VERSION = '06.04.00'
+    VERSION = '06.05.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
@@ -145,6 +146,10 @@ class UnityDriver(driver.ManageableVD,
     def migrate_volume(self, context, volume, host):
         """Migrates a volume."""
         return self.adapter.migrate_volume(volume, host)
+
+    def retype(self, ctxt, volume, new_type, diff, host):
+        """Convert the volume to be of the new type."""
+        return self.adapter.retype(ctxt, volume, new_type, diff, host)
 
     def create_snapshot(self, snapshot):
         """Creates a snapshot."""
