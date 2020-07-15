@@ -57,6 +57,8 @@ class UnityDriver(driver.TransferVD,
     """Unity Driver.
 
     Version history:
+        00.04.16 - Support storage assisted volume migration (cherry pick from
+                   upstream pike)
         00.04.15 - Support compressed volume (cherry pick from downstream pike)
         00.04.14 - Fixes the bug which thick volume failed to create (cherry
                    pick from downstream pike)
@@ -79,7 +81,7 @@ class UnityDriver(driver.TransferVD,
         00.04.02 - Initial version
     """
 
-    VERSION = '00.04.15'
+    VERSION = '00.04.16'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
@@ -121,6 +123,10 @@ class UnityDriver(driver.TransferVD,
     def delete_volume(self, volume):
         """Deletes a volume."""
         self.adapter.delete_volume(volume)
+
+    def migrate_volume(self, context, volume, host):
+        """Migrates a volume."""
+        return self.adapter.migrate_volume(volume, host)
 
     def create_snapshot(self, snapshot):
         """Creates a snapshot."""
