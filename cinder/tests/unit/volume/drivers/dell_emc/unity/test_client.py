@@ -191,6 +191,11 @@ class MockResource(object):
             raise ex.UnityLunNameInUseError
         return MockResource(_id=name, name=name)
 
+    def migrate(self, dest_pool):
+        if dest_pool.id == 'pool_2':
+            return False
+        return True
+
 
 class MockResourceList(object):
     def __init__(self, names=None, ids=None):
@@ -255,7 +260,11 @@ class MockSystem(object):
         return MockResource(name, _id)
 
     @staticmethod
-    def get_pool():
+    def get_pool(_id=None, name=None):
+        if name == 'Pool 3':
+            return MockResource(name, 'pool_3')
+        if name or _id:
+            return MockResource(name, _id)
         return MockResourceList(['Pool 1', 'Pool 2'])
 
     @staticmethod
@@ -570,6 +579,17 @@ class ClientTest(unittest.TestCase):
     def test_expand_lun_nothing_to_modify(self):
         lun = self.client.extend_lun('ev_4', 5)
         self.assertEqual(5, lun.total_size_gb)
+
+    def test_migrate_lun_success(self):
+        ret = self.client.migrate_lun('lun_0', 'pool_1')
+        self.assertTrue(ret)
+
+    def test_migrate_lun_failed(self):
+        ret = self.client.migrate_lun('lun_0', 'pool_2')
+        self.assertFalse(ret)
+
+    def test_get_pool_id_by_name(self):
+        self.assertEqual('pool_3', self.client.get_pool_id_by_name('Pool 3'))
 
     def test_get_pool_name(self):
         self.assertEqual('Pool0', self.client.get_pool_name('lun_0'))
