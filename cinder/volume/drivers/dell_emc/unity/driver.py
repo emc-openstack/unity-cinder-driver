@@ -72,9 +72,10 @@ class UnityDriver(driver.ManageableVD,
         2.8.0 - Support compressed volume (cherry pick from upstream rocky)
         2.9.0 - Support storage assisted volume migration (cherry pick from
                 upstream stein)
+        2.10.0 - Support retype volume (cherry pick from downstream train)
     """
 
-    VERSION = '02.09.00'
+    VERSION = '02.10.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
@@ -120,6 +121,10 @@ class UnityDriver(driver.ManageableVD,
     def migrate_volume(self, context, volume, host):
         """Migrates a volume."""
         return self.adapter.migrate_volume(volume, host)
+
+    def retype(self, ctxt, volume, new_type, diff, host):
+        """Convert the volume to be of the new type."""
+        return self.adapter.retype(ctxt, volume, new_type, diff, host)
 
     def create_snapshot(self, snapshot):
         """Creates a snapshot."""
