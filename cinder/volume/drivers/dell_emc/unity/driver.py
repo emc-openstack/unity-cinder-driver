@@ -88,9 +88,11 @@ class UnityDriver(driver.ManageableVD,
         6.4.0 - Fixes bug 1883677 to convert the value of total_bytes_sec
                 to KBPS to set correct bandwidth
         6.5.0 - Support retype volume (cherry pick from upstream ussuri)
+        6.6.0 - Fixes bug 1894176 to make sure multiple volumes which
+                replication enabled could be failback successfully
     """
 
-    VERSION = '06.05.00'
+    VERSION = '06.06.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
