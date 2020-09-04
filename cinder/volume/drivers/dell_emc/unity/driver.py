@@ -92,9 +92,11 @@ class UnityDriver(driver.ManageableVD,
         4.9.0 - Support force delete attached snapshots
         4.10.0 - Support auto zoning of snapshots
         4.11.0 - Support volume replication
+        4.12.0 - Fixes bug 1894176 to make sure multiple volumes which
+                 replication enabled could be failback successfully
     """
 
-    VERSION = '04.11.00'
+    VERSION = '04.12.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
