@@ -353,6 +353,7 @@ class CommonAdapter(object):
                 lun, dst.max_time_out_of_sync,
                 dst.destination_pool.get_id(), remote_system)
             rep_data[backend_id] = rep_session.name
+            rep_data['default'] = rep_session.name
         return utils.enable_replication_status(model_update, rep_data)
 
     def create_volume(self, volume):
@@ -1071,7 +1072,8 @@ class CommonAdapter(object):
 
         def _failover_or_back(volume):
             LOG.debug('Failing over volume: %(vol)s to secondary id: '
-                      '%(sec_id)s', vol=volume.name, sec_id=secondary_id)
+                      '%(sec_id)s', {'vol': volume.name,
+                                     'sec_id': secondary_id})
             model_update = {
                 'volume_id': volume.id,
                 'updates': {}
@@ -1112,7 +1114,6 @@ class CommonAdapter(object):
                         rep_session.dst_resource_id)
 
                 model_update['updates'].update(new_model)
-                self.replication_manager.failover_service(secondary_id)
                 return model_update
             except client.ClientReplicationError as ex:
                 LOG.error('Failover failed, volume: %(vol)s, secondary id: '
@@ -1120,9 +1121,11 @@ class CommonAdapter(object):
                           vol=volume.name, sec_id=secondary_id, err=ex)
                 return utils.error_replication_status(model_update)
 
-        return (secondary_id,
+        data = (secondary_id,
                 [_failover_or_back(volume) for volume in volumes],
                 [])
+        self.replication_manager.failover_service(secondary_id)
+        return data
 
 
 class ISCSIAdapter(CommonAdapter):

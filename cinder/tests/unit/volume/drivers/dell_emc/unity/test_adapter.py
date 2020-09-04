@@ -272,11 +272,19 @@ class MockClient(object):
     def get_replication_session(self, name=None):
         if name == 'not-found-rep-session':
             raise client.ClientReplicationError()
-
-        rep_session = test_client.MockResource(_id='rep_session_id_1')
+        elif name == 'rep_session_name_2':
+            rep_session = test_client.MockResource(_id='rep_session_id_2')
+            rep_session.src_resource_id = 'sv_2'
+            rep_session.dst_resource_id = 'sv_102'
+        elif name == 'rep_session_name_3':
+            rep_session = test_client.MockResource(_id='rep_session_id_3')
+            rep_session.src_resource_id = 'sv_3'
+            rep_session.dst_resource_id = 'sv_103'
+        else:
+            rep_session = test_client.MockResource(_id='rep_session_id_1')
+            rep_session.src_resource_id = 'sv_1'
+            rep_session.dst_resource_id = 'sv_99'
         rep_session.name = name
-        rep_session.src_resource_id = 'sv_1'
-        rep_session.dst_resource_id = 'sv_99'
         return rep_session
 
     def create_replication(self, src_lun, max_time_out_of_sync,
@@ -290,11 +298,15 @@ class MockClient(object):
         return None
 
     def failover_replication(self, rep_session):
-        if rep_session.name != 'rep_session_name_1':
+        if rep_session.name not in ['rep_session_name_1',
+                                    'rep_session_name_2',
+                                    'rep_session_name_3']:
             raise client.ClientReplicationError()
 
     def failback_replication(self, rep_session):
-        if rep_session.name != 'rep_session_name_1':
+        if rep_session.name not in ['rep_session_name_1',
+                                    'rep_session_name_2',
+                                    'rep_session_name_3']:
             raise client.ClientReplicationError()
 
 
@@ -1327,8 +1339,10 @@ class CommonAdapterTest(test.TestCase):
         self.assertEqual('enabled', model_update['replication_status'])
 
         self.assertIn('replication_driver_data', model_update)
-        self.assertEqual('{"secondary_unity": "rep_session_name_1"}',
-                         model_update['replication_driver_data'])
+        self.assertIn('"secondary_unity": "rep_session_name_1"',
+                      model_update['replication_driver_data'])
+        self.assertIn('"default": "rep_session_name_1"',
+                      model_update['replication_driver_data'])
 
     def test_setup_replications_not_configured_replication(self):
         model_update = self.adapter.setup_replications(
@@ -1363,7 +1377,8 @@ class CommonAdapterTest(test.TestCase):
         volume = MockOSResource(
             id='volume-id-1',
             name='volume-name-1',
-            replication_driver_data='{"secondary_unity":"rep_session_name_1"}')
+            replication_driver_data='{"default":"rep_session_name_1",'
+                                    '"secondary_unity":"rep_session_name_1"}')
         model_update = self.adapter.failover([volume],
                                              secondary_id=failover_to)
         self.assertEqual(3, len(model_update))
@@ -1384,6 +1399,74 @@ class CommonAdapterTest(test.TestCase):
         self.assertTrue(
             self.adapter.replication_manager.is_service_failed_over)
 
+    @ddt.data({'failover_to': 'secondary_unity'},
+              {'failover_to': None})
+    @ddt.unpack
+    def test_failover_multi_volumes(self, failover_to):
+        secondary_id = 'secondary_unity'
+        secondary_device = mock_replication_device()
+        self.adapter.replication_manager.is_replication_configured = True
+        self.adapter.replication_manager.replication_devices = {
+            secondary_id: secondary_device
+        }
+
+        volume_1 = MockOSResource(
+            id='volume-id-1',
+            name='volume-name-1',
+            replication_driver_data='{"default":"rep_session_name_1",'
+                                    '"secondary_unity":"rep_session_name_1"}')
+        volume_2 = MockOSResource(
+            id='volume-id-2',
+            name='volume-name-2',
+            replication_driver_data='{"default":"rep_session_name_2",'
+                                    '"secondary_unity":"rep_session_name_2"}')
+        volume_3 = MockOSResource(
+            id='volume-id-3',
+            name='volume-name-3',
+            replication_driver_data='{"default":"rep_session_name_3",'
+                                    '"secondary_unity":"rep_session_name_3"}')
+        model_update = self.adapter.failover([volume_1, volume_2, volume_3],
+                                             secondary_id=failover_to)
+        self.assertEqual(3, len(model_update))
+        active_backend_id, volumes_update, groups_update = model_update
+        self.assertEqual(secondary_id, active_backend_id)
+        self.assertEqual([], groups_update)
+
+        self.assertEqual(3, len(volumes_update))
+
+        model_update_1 = volumes_update[0]
+        self.assertIn('volume_id', model_update_1)
+        self.assertEqual('volume-id-1', model_update_1['volume_id'])
+        self.assertIn('updates', model_update_1)
+        self.assertEqual(
+            {'provider_id': 'sv_99',
+             'provider_location':
+                 'id^sv_99|system^SECONDARY_UNITY_SN|type^lun|version^None'},
+            model_update_1['updates'])
+
+        model_update_2 = volumes_update[1]
+        self.assertIn('volume_id', model_update_2)
+        self.assertEqual('volume-id-2', model_update_2['volume_id'])
+        self.assertIn('updates', model_update_2)
+        self.assertEqual(
+            {'provider_id': 'sv_102',
+             'provider_location':
+                 'id^sv_102|system^SECONDARY_UNITY_SN|type^lun|version^None'},
+            model_update_2['updates'])
+
+        model_update_3 = volumes_update[2]
+        self.assertIn('volume_id', model_update_3)
+        self.assertEqual('volume-id-3', model_update_3['volume_id'])
+        self.assertIn('updates', model_update_3)
+        self.assertEqual(
+            {'provider_id': 'sv_103',
+             'provider_location':
+                 'id^sv_103|system^SECONDARY_UNITY_SN|type^lun|version^None'},
+            model_update_3['updates'])
+
+        self.assertTrue(
+            self.adapter.replication_manager.is_service_failed_over)
+
     def test_failover_raise(self):
         secondary_id = 'secondary_unity'
         secondary_device = mock_replication_device()
@@ -1396,11 +1479,11 @@ class CommonAdapterTest(test.TestCase):
             id='volume-id-1',
             name='volume-name-1',
             replication_driver_data='{"secondary_unity":"rep_session_name_1"}')
-        vol2 = MockOSResource(
-            id='volume-id-2',
-            name='volume-name-2',
-            replication_driver_data='{"secondary_unity":"rep_session_name_2"}')
-        model_update = self.adapter.failover([vol1, vol2],
+        vol5 = MockOSResource(
+            id='volume-id-5',
+            name='volume-name-5',
+            replication_driver_data='{"secondary_unity":"rep_session_name_5"}')
+        model_update = self.adapter.failover([vol1, vol5],
                                              secondary_id=secondary_id)
         active_backend_id, volumes_update, groups_update = model_update
         self.assertEqual(secondary_id, active_backend_id)
@@ -1419,7 +1502,7 @@ class CommonAdapterTest(test.TestCase):
 
         m = volumes_update[1]
         self.assertIn('volume_id', m)
-        self.assertEqual('volume-id-2', m['volume_id'])
+        self.assertEqual('volume-id-5', m['volume_id'])
         self.assertIn('updates', m)
         self.assertEqual({'replication_status': 'failover-error'},
                          m['updates'])
@@ -1466,6 +1549,81 @@ class CommonAdapterTest(test.TestCase):
              'provider_location':
                  'id^sv_1|system^PRIMARY_UNITY_SN|type^lun|version^None'},
             model_update['updates'])
+        self.assertFalse(
+            self.adapter.replication_manager.is_service_failed_over)
+
+    def test_failover_failback_multi_volumes(self):
+        secondary_id = 'secondary_unity'
+        secondary_device = mock_replication_device()
+        self.adapter.replication_manager.is_replication_configured = True
+        self.adapter.replication_manager.replication_devices = {
+            secondary_id: secondary_device
+        }
+        default_device = mock_replication_device(
+            device_conf={
+                'backend_id': 'default',
+                'san_ip': '10.10.10.10'
+            }, serial_number='PRIMARY_UNITY_SN'
+        )
+        self.adapter.replication_manager.default_device = default_device
+        self.adapter.replication_manager.active_adapter = (
+            self.adapter.replication_manager.replication_devices[
+                secondary_id].adapter)
+        self.adapter.replication_manager.active_backend_id = secondary_id
+
+        volume_1 = MockOSResource(
+            id='volume-id-1',
+            name='volume-name-1',
+            replication_driver_data='{"default":"rep_session_name_1",'
+                                    '"secondary_unity":"rep_session_name_1"}')
+        volume_2 = MockOSResource(
+            id='volume-id-2',
+            name='volume-name-2',
+            replication_driver_data='{"default":"rep_session_name_2",'
+                                    '"secondary_unity":"rep_session_name_2"}')
+        volume_3 = MockOSResource(
+            id='volume-id-3',
+            name='volume-name-3',
+            replication_driver_data='{"default":"rep_session_name_3",'
+                                    '"secondary_unity":"rep_session_name_3"}')
+        model_update = self.adapter.failover([volume_1, volume_2, volume_3],
+                                             secondary_id='default')
+        active_backend_id, volumes_update, groups_update = model_update
+        self.assertEqual('default', active_backend_id)
+        self.assertEqual([], groups_update)
+
+        self.assertEqual(3, len(volumes_update))
+
+        model_update_1 = volumes_update[0]
+        self.assertIn('volume_id', model_update_1)
+        self.assertEqual('volume-id-1', model_update_1['volume_id'])
+        self.assertIn('updates', model_update_1)
+        self.assertEqual(
+            {'provider_id': 'sv_1',
+             'provider_location':
+                 'id^sv_1|system^PRIMARY_UNITY_SN|type^lun|version^None'},
+            model_update_1['updates'])
+
+        model_update_2 = volumes_update[1]
+        self.assertIn('volume_id', model_update_2)
+        self.assertEqual('volume-id-2', model_update_2['volume_id'])
+        self.assertIn('updates', model_update_2)
+        self.assertEqual(
+            {'provider_id': 'sv_2',
+             'provider_location':
+                 'id^sv_2|system^PRIMARY_UNITY_SN|type^lun|version^None'},
+            model_update_2['updates'])
+
+        model_update_3 = volumes_update[2]
+        self.assertIn('volume_id', model_update_3)
+        self.assertEqual('volume-id-3', model_update_3['volume_id'])
+        self.assertIn('updates', model_update_3)
+        self.assertEqual(
+            {'provider_id': 'sv_3',
+             'provider_location':
+                 'id^sv_3|system^PRIMARY_UNITY_SN|type^lun|version^None'},
+            model_update_3['updates'])
+
         self.assertFalse(
             self.adapter.replication_manager.is_service_failed_over)
 
