@@ -89,9 +89,10 @@ class UnityDriver(driver.ManageableVD,
                 upstream stein)
         4.8.0 - Support retype volume (cherry pick from downstream train)
         4.9.0 - Support force delete attached snapshots
+        4.10.0 - Support auto zoning of snapshots
     """
 
-    VERSION = '04.09.00'
+    VERSION = '04.10.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
@@ -277,7 +278,10 @@ class UnityDriver(driver.ManageableVD,
         pass
 
     def initialize_connection_snapshot(self, snapshot, connector, **kwargs):
-        return self.adapter.initialize_connection_snapshot(snapshot, connector)
+        conn_info = self.adapter.initialize_connection_snapshot(snapshot, connector)
+        # Auto zoning for snapshot
+        zm_utils.add_fc_zone(conn_info)
+        return conn_info
 
     def terminate_connection_snapshot(self, snapshot, connector, **kwargs):
         return self.adapter.terminate_connection_snapshot(snapshot, connector)
