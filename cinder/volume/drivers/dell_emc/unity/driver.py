@@ -88,9 +88,10 @@ class UnityDriver(driver.ManageableVD,
         4.7.0 - Support storage assisted volume migration (cherry pick from
                 upstream stein)
         4.8.0 - Support retype volume (cherry pick from downstream train)
+        4.9.0 - Support force delete attached snapshots
     """
 
-    VERSION = '04.08.00'
+    VERSION = '04.09.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"

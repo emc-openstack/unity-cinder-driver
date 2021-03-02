@@ -1,0 +1,6 @@
+---
+fixes:
+  - |
+    Dell EMC Unity Driver: Fixes `bug 1798529
+    <https://bugs.launchpad.net/cinder/+bug/1798529>`__ to force delete the
+    snapshot even if it is attached to hosts.
