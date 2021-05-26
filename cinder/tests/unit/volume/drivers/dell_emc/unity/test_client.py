@@ -121,6 +121,8 @@ class MockResource(object):
             raise ex.DetachFromIsCalled()
 
     def get_hlu(self, lun):
+        if lun.name == 'lun_multiattached':
+            return 100
         return self.alu_hlu_map.get(lun.get_id(), None)
 
     @staticmethod
@@ -300,6 +302,8 @@ class MockSystem(object):
             host_access_2.host = MockResource(name='host_2', _id='host_2')
             lun.host_access = [host_access_1, host_access_2]
             return lun
+        if _id == 'lun_multiattached':
+            return MockResource(name=_id, _id=_id)
         return MockResource(name, _id)
 
     @staticmethod
