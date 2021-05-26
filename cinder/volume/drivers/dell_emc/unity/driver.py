@@ -90,9 +90,11 @@ class UnityDriver(driver.ManageableVD,
         6.5.0 - Support retype volume (cherry pick from upstream ussuri)
         6.6.0 - Fixes bug 1894176 to make sure multiple volumes which
                 replication enabled could be failback successfully
+        6.7.0 - Return existing hlu for multi-attached volume, to fix the
+                faulty device issue
     """
 
-    VERSION = '06.06.00'
+    VERSION = '06.07.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
