@@ -473,7 +473,8 @@ class CommonAdapter(object):
             lun.modify(is_compression=need_change_compress[1])
         return True
 
-    def _create_host_and_attach(self, host_name, lun_or_snap):
+    def _create_host_and_attach(self, host_name, lun_or_snap,
+                                is_multiattach=False):
         @utils.lock_if(self.to_lock_host, '{lock_name}')
         def _lock_helper(lock_name):
             if not self.to_lock_host:
@@ -481,15 +482,19 @@ class CommonAdapter(object):
             else:
                 # Use the lock in the decorator
                 host = self.client.create_host_wo_lock(host_name)
-            hlu = self.client.attach(host, lun_or_snap)
+            hlu = host.get_hlu(lun_or_snap)
+            if not (hlu and is_multiattach):
+                hlu = self.client.attach(host, lun_or_snap)
             return host, hlu
 
         return _lock_helper('{unity}-{host}'.format(unity=self.client.host,
                                                     host=host_name))
 
-    def _initialize_connection(self, lun_or_snap, connector, vol_id):
+    def _initialize_connection(self, lun_or_snap, connector, vol_id,
+                               is_multiattach=False):
         host, hlu = self._create_host_and_attach(connector['host'],
-                                                 lun_or_snap)
+                                                 lun_or_snap,
+                                                 is_multiattach=is_multiattach)
         self.client.update_host_initiators(
             host, self.get_connector_uids(connector))
         data = self.get_connection_info(hlu, host, connector)
@@ -505,7 +510,8 @@ class CommonAdapter(object):
     @cinder_utils.trace
     def initialize_connection(self, volume, connector):
         lun = self.client.get_lun(lun_id=self.get_lun_id(volume))
-        return self._initialize_connection(lun, connector, volume.id)
+        return self._initialize_connection(lun, connector, volume.id,
+                                           is_multiattach=volume.multiattach)
 
     @staticmethod
     def filter_targets_by_host(host):

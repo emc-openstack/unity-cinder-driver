@@ -395,6 +395,8 @@ def get_connector_uids(adapter, connector):
 
 
 def get_connection_info(adapter, hlu, host, connector):
+    if hlu == 100:
+        return {'target_luns': [100, 100], 'target_lun': 100}
     return {}
 
 
@@ -1826,6 +1828,20 @@ class ISCSIAdapterTest(test.TestCase):
         self.assertEqual('iscsi', conn_info['driver_volume_type'])
         self.assertTrue(conn_info['data']['target_discovered'])
         self.assertEqual('id_43', conn_info['data']['volume_id'])
+
+    @patch_for_iscsi_adapter
+    def test_initialize_connection_multiattached_volume(self):
+        volume = MockOSResource(provider_location='id^lun_multiattached',
+                                id='lun_multiattached',
+                                name='lun_multiattached',
+                                multiattach=True)
+        connector = {'host': 'host1'}
+        conn_info = self.adapter.initialize_connection(volume, connector)
+        self.assertEqual('iscsi', conn_info['driver_volume_type'])
+        self.assertTrue(conn_info['data']['target_discovered'])
+        self.assertEqual('lun_multiattached', conn_info['data']['volume_id'])
+        self.assertEqual([100, 100], conn_info['data']['target_luns'])
+        self.assertEqual(100, conn_info['data']['target_lun'])
 
     @patch_for_iscsi_adapter
     def test_initialize_connection_snapshot(self):
