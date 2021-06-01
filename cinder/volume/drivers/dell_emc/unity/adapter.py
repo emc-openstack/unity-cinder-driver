@@ -24,6 +24,7 @@ from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import importutils
 
+from cinder import coordination
 from cinder import exception
 from cinder.i18n import _
 from cinder.objects import fields
@@ -473,6 +474,13 @@ class CommonAdapter(object):
             lun.modify(is_compression=need_change_compress[1])
         return True
 
+    @coordination.synchronized('unity-{lun_or_snap.name}')
+    def _get_host_hlu(self, host, lun_or_snap, is_multiattach=False):
+        hlu = host.get_hlu(lun_or_snap)
+        if not (hlu and is_multiattach):
+            hlu = self.client.attach(host, lun_or_snap)
+        return hlu
+
     def _create_host_and_attach(self, host_name, lun_or_snap,
                                 is_multiattach=False):
         @utils.lock_if(self.to_lock_host, '{lock_name}')
@@ -482,9 +490,7 @@ class CommonAdapter(object):
             else:
                 # Use the lock in the decorator
                 host = self.client.create_host_wo_lock(host_name)
-            hlu = host.get_hlu(lun_or_snap)
-            if not (hlu and is_multiattach):
-                hlu = self.client.attach(host, lun_or_snap)
+            hlu = self._get_host_hlu(host, lun_or_snap, is_multiattach)
             return host, hlu
 
         return _lock_helper('{unity}-{host}'.format(unity=self.client.host,

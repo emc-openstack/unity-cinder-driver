@@ -92,9 +92,11 @@ class UnityDriver(driver.ManageableVD,
                 replication enabled could be failback successfully
         6.7.0 - Return existing hlu for multi-attached volume, to fix the
                 faulty device issue
+        6.8.0 - Add a lock when attaching volume to avoid the lun being
+                modified at the same time
     """
 
-    VERSION = '06.07.00'
+    VERSION = '06.08.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
