@@ -845,14 +845,14 @@ class CommonAdapterTest(test.TestCase):
         src_vref = MockOSResource(id=src_lun_id, name=src_lun_id,
                                   provider_location=get_lun_pl(src_lun_id),
                                   volume_attachment=['not_care'])
-        with patch_dd_copy(test_client.MockResource(_id=lun_id)) as dd:
+        with patch_thin_clone(test_client.MockResource(_id=lun_id)) as tc:
             ret = self.adapter.create_cloned_volume(volume, src_vref)
-            dd.assert_called_with(
+            tc.assert_called_with(
                 adapter.VolumeParams(self.adapter, volume),
                 IdMatcher(test_client.MockResource(
                     _id='snap_clone_{}'.format(src_lun_id))),
                 src_lun=IdMatcher(test_client.MockResource(_id=src_lun_id)))
-            self.assertEqual(get_lun_pl(lun_id), ret['provider_location'])
+            self.assertEqual(get_snap_lun_pl(lun_id), ret['provider_location'])
 
     @patch_for_unity_adapter
     def test_create_cloned_volume_available(self):
