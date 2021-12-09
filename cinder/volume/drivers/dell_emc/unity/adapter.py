@@ -914,17 +914,9 @@ class CommonAdapter(object):
                       'name: %(name)s, id: %(id)s.',
                       {'name': src_snap_name,
                        'id': src_snap.get_id()})
-            if src_vref.volume_attachment:
-                lun = self._dd_copy(vol_params, src_snap, src_lun=src_lun)
-                LOG.debug('Volume copied using dd because source volume: '
-                          '%(name)s is attached: %(attach)s.',
-                          {'name': src_vref.name,
-                           'attach': src_vref.volume_attachment})
-                model_update = self.makeup_model(lun.get_id())
-            else:
-                lun = self._thin_clone(vol_params, src_snap, src_lun=src_lun)
-                model_update = self.makeup_model(lun.get_id(),
-                                                 is_snap_lun=True)
+            lun = self._thin_clone(vol_params, src_snap, src_lun=src_lun)
+            model_update = self.makeup_model(lun.get_id(),
+                                             is_snap_lun=True)
 
             if vol_params.is_replication_enabled:
                 model_update = self.setup_replications(lun, model_update)

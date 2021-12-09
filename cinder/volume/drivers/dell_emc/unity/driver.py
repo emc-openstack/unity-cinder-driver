@@ -94,9 +94,10 @@ class UnityDriver(driver.ManageableVD,
                 faulty device issue
         6.8.0 - Add a lock when attaching volume to avoid the lun being
                 modified at the same time
+        6.9.0 - Support thin clone for attached volume
     """
 
-    VERSION = '06.08.00'
+    VERSION = '06.09.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
