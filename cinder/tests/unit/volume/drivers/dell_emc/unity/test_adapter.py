@@ -948,6 +948,7 @@ class CommonAdapterTest(test.TestCase):
                 adapter.VolumeParams(self.adapter, volume),
                 src_snap, src_lun=src_lun)
             vol_params = adapter.VolumeParams(self.adapter, volume)
+            vol_params.size = src_lun.size_total / units.Gi
             vol_params.name = 'hidden-{}'.format(volume.name)
             vol_params.description = 'hidden-{}'.format(volume.description)
             dd.assert_called_with(vol_params, src_snap, src_lun=src_lun)
@@ -969,6 +970,7 @@ class CommonAdapterTest(test.TestCase):
             ret = self.adapter._thin_clone(
                 adapter.VolumeParams(self.adapter, volume), src_snap)
             vol_params = adapter.VolumeParams(self.adapter, volume)
+            vol_params.size = src_snap.size / units.Gi
             vol_params.name = 'hidden-{}'.format(volume.name)
             vol_params.description = 'hidden-{}'.format(volume.description)
             dd.assert_called_with(vol_params, src_snap, src_lun=None)

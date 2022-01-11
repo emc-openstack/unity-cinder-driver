@@ -840,6 +840,12 @@ class CommonAdapter(object):
                      'limit, dd-copy a new one and thin clone from it.')
             # Copy via dd if thin clone meets the system limit
             hidden = copy.copy(vol_params)
+            # Make sure the size of the hidden lun same as the source lun
+            if src_lun is None:
+                size_in_g = utils.byte_to_gib(src_snap.size)
+            else:
+                size_in_g = utils.byte_to_gib(src_lun.size_total)
+            hidden.size = size_in_g
             hidden.name = 'hidden-%s' % vol_params.name
             hidden.description = 'hidden-%s' % vol_params.description
             copied_lun = self._dd_copy(hidden, src_snap, src_lun=src_lun)
