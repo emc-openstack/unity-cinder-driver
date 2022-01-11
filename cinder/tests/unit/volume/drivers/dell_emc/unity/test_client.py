@@ -56,6 +56,7 @@ class MockResource(object):
         self.luns = None
         self.lun = None
         self.snap = True
+        self.size = 3 * units.Gi
 
     @property
     def id(self):
