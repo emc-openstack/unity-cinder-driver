@@ -275,6 +275,7 @@ class UnityClient(object):
             self.host_cache[name] = host
         else:
             host = self.host_cache[name]
+            host.update()
         return host
 
     def delete_host_wo_lock(self, host):
