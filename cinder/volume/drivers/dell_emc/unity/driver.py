@@ -97,9 +97,10 @@ class UnityDriver(driver.ManageableVD,
         6.9.0 - Support thin clone for attached volume
         6.10.0 - Make sure the size of the hidden volume same as the
                  thin clone base
+        6.11.0 - Update host info when getting host from host_cache
     """
 
-    VERSION = '06.10.00'
+    VERSION = '06.11.00'
     VENDOR = 'Dell EMC'
     # ThirdPartySystems wiki page
     CI_WIKI_NAME = "EMC_UNITY_CI"
